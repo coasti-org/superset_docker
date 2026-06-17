@@ -1,6 +1,5 @@
 name: Auto Release
 
-
 # PS 2026-01-23 Disabled Auto-Release, until Docker step works. (Manual releases do
 # trigger the docker step)
 # on:

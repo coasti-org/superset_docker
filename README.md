@@ -1,7 +1,8 @@
 # Apache Superset Production Docker Setup
 
-This directory contains a production-ready Docker Compose setup for Apache Superset with separated containers for better scalability, security, and maintenance.
+This directory contains a production-ready [Docker Compose](https://docs.docker.com/compose/) setup for [Apache Superset](https://superset.apache.org/) with separated containers for better scalability, security, and maintenance.
 
+Branding by and for [coasti.org](https://coasti.org/).
 
 ## 📋 Prerequisites
 
