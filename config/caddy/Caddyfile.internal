@@ -1,0 +1,25 @@
+{$DOMAIN_NAME} {
+	# Custom certificate mode.
+	# Provide the files via bind mount and set TLS_CERT_FILE / TLS_KEY_FILE.
+	tls {$TLS_CERT_FILE} {$TLS_KEY_FILE}
+
+	reverse_proxy superset-app:8088 {
+        # Timeouts for long-running operations
+        transport http {
+            read_timeout 3600s
+            write_timeout 3600s
+        }
+    }
+}
+
+test-{$DOMAIN_NAME} {
+	tls {$TLS_CERT_FILE} {$TLS_KEY_FILE}
+
+	reverse_proxy superset-app-test:8088 {
+        # Timeouts for long-running operations
+        transport http {
+            read_timeout 3600s
+            write_timeout 3600s
+        }
+    }
+}

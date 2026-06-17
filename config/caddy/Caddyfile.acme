@@ -1,0 +1,24 @@
+{
+	# Uses a public ACME CA (Let's Encrypt / ZeroSSL) automatically.
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN_NAME} {
+	reverse_proxy superset-app:8088 {
+        # Timeouts for long-running operations
+        transport http {
+            read_timeout 3600s
+            write_timeout 3600s
+        }
+    }
+}
+
+test-{$DOMAIN_NAME} {
+	reverse_proxy superset-app-test:8088 {
+        # Timeouts for long-running operations
+        transport http {
+            read_timeout 3600s
+            write_timeout 3600s
+        }
+    }
+}

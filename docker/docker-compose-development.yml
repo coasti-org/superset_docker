@@ -1,0 +1,36 @@
+# Override to build the contianers locally instead of using remote images.
+# Also exposes all container ports for direct access without caddy.
+# run from the repo dir via eg:
+# docker compose -f ./docker/docker-compose-sample.yml -f ./docker/docker-compose-development.yml up --build
+
+x-templates:
+  dev_overrides: &dev_overrides
+    pull_policy: never
+    build:
+      context: ../
+      dockerfile: ./docker/Dockerfile
+    image: superset_docker_dev
+
+
+services:
+  superset-app:
+    <<: *dev_overrides
+    ports:
+      - "8088:8088"
+
+  superset-init:
+    <<: *dev_overrides
+
+  superset-worker:
+    <<: *dev_overrides
+
+  superset-beat:
+    <<: *dev_overrides
+
+  superset-redis:
+    ports:
+      - "${REDIS_PORT:-6379}:${REDIS_PORT:-6379}"
+
+  superset-postgres:
+    ports:
+      - "${POSTGRES_PORT:-5432}:${POSTGRES_PORT:-5432}"

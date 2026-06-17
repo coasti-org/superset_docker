@@ -1,0 +1,267 @@
+# run from the repo dir via eg:
+# docker compose -f ./docker/docker-compose-sample.yml up --build
+
+name: superset
+
+# define snippets we reuse in various places as yaml anchors
+x-templates:
+  image: &superset_image ghcr.io/linkfish-consulting/superset_docker:0.1.3-superset.6.1.0
+
+  # -------------------------------- Volumes ------------------------------- #
+
+  superset_volumes: &superset_volumes
+    - ../config/superset_config.py:/app/superset/superset_config.py
+    - ../data:/data
+    - ../logs:/app/superset_home/logs
+    - ../assets:/app/superset/static/assets/custom
+    # entrypoints are baked into the image via the Dockerfile.
+
+    - superset_home:/app/superset_home
+    # persistent storage for sample databases, user uploads etc.
+
+    - superset_keycloak_data:/app/superset/auth_keycloak
+    # also when not hosting your own keycloak, used in our example supser_config.py
+
+  caddy_volumes: &caddy_volumes
+    - ../config/caddy/Caddyfile.acme:/etc/caddy/Caddyfile.acme:ro
+    - ../config/caddy/Caddyfile.internal:/etc/caddy/Caddyfile.internal:ro
+    - ../config/caddy/Caddyfile.selfsigned:/etc/caddy/Caddyfile.selfsigned:ro
+    - ../config/certs:/etc/caddy/certs:ro
+    - ./entrypoint/start_caddy.sh:/etc/caddy/start_caddy.sh:ro
+    - caddy_data:/data
+
+  pg_volumes: &pg_volumes
+    - ./entrypoint/init_postgres.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    - postgres_data:/var/lib/postgresql/data
+
+  redis_volumes: &redis_volumes
+    - redis_data:/data
+
+  # ------------------------------- env vars ------------------------------- #
+
+  # we want each container to only have those env vars that it needs.
+  # therefore, you need to specify your .env, which may contain all vars, via --env-file
+  # in your compose command. see here: https://stackoverflow.com/a/72368718
+  caddy_vars: &caddy_vars
+    DOMAIN_NAME: ${DOMAIN_NAME}
+    DOMAIN: ${DOMAIN}
+    ACME_EMAIL: ${ACME_EMAIL}
+    TLS_MODE: ${TLS_MODE:-selfsigned}
+    TLS_CERT_FILE: ${TLS_CERT_FILE:-/etc/caddy/certs/fullchain.pem}
+    TLS_KEY_FILE: ${TLS_KEY_FILE:-/etc/caddy/certs/privkey.pem}
+
+  pg_vars: &pg_vars
+    POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+    POSTGRES_PORT: 5432
+    POSTGRES_DB: ${POSTGRES_DB:-superset}
+    POSTGRES_USER: ${POSTGRES_USER:-superset}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+  redis_vars: &redis_vars
+    REDIS_HOST: ${REDIS_HOST:-redis}
+    REDIS_PORT: 6379
+    REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+  superset_vars: &superset_vars
+    SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+    SUPERSET_ADMIN: ${SUPERSET_ADMIN:-admin}
+    SUPERSET_PASSWORD: ${SUPERSET_PASSWORD:-admin}
+    SUPERSET_ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL:-admin@superset.local}
+    SUPERSET_LOAD_EXAMPLES: ${SUPERSET_LOAD_EXAMPLES:-no}
+
+    FLASK_ENV: ${FLASK_ENV:-production}
+    SERVER_WORKER_AMOUNT: ${SERVER_WORKER_AMOUNT}
+    SERVER_THREADS_AMOUNT: ${SERVER_THREADS_AMOUNT}
+
+    MAPBOX_API_KEY: ${MAPBOX_API_KEY}
+
+    NO_PROXY: ${NO_PROXY}
+
+    SMTP_USER: ${SMTP_USER}
+    SMTP_HOST: ${SMTP_HOST}
+    SMTP_PORT: ${SMTP_PORT}
+    SMTP_PASSWORD: ${SMTP_PASSWORD}
+
+    DOMAIN_NAME: ${DOMAIN_NAME}
+    DOMAIN: ${DOMAIN}
+    AUTH_TYPE: ${AUTH_TYPE:-AUTH_DB}
+    USE_ROLE_BASED_REDIRECTS: ${USE_ROLE_BASED_REDIRECTS}
+    REQUESTS_CA_BUNDLE: ${REQUESTS_CA_BUNDLE:-} # its okay if not set.
+    SSL_CERT_FILE: ${SSL_CERT_FILE:-}
+    <<: [*pg_vars, *redis_vars]
+
+
+# ------------------------------- Containers ------------------------------- #
+
+services:
+
+  superset-caddy:
+    image: caddy:2
+    container_name: superset-caddy
+    restart: unless-stopped
+    environment:
+        <<: *caddy_vars
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      proxy:
+        aliases:
+          - ${DOMAIN_NAME}
+    volumes: *caddy_volumes
+    command: /etc/caddy/start_caddy.sh
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost:80"] # no curl or wget available in container
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Superset Web Server
+  superset-app:
+    image: *superset_image
+    container_name: superset-app
+    restart: unless-stopped
+    environment:
+        <<: *superset_vars
+    command: ["/app/superset/entrypoint/start_superset.sh"]
+    # Intentionally NOT exposing Superset directly; access it via Caddy.
+    ports:
+      - "8088:8088"
+    networks:
+      - default
+      - proxy
+    depends_on:
+      superset-caddy:
+        condition: service_healthy
+      superset-postgres:
+        condition: service_healthy
+      superset-redis:
+        condition: service_healthy
+      superset-init:
+        condition: service_completed_successfully
+    shm_size: "2gb" # shared memory size for better performance, especially with Playwright screenshots
+    volumes: *superset_volumes
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+
+  # PostgreSQL Database
+  superset-postgres:
+    image: postgres:17
+    container_name: superset-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-superset}
+      POSTGRES_USER: ${POSTGRES_USER:-superset}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes: *pg_volumes
+    # Intentionally NOT exposing Superset directly for security reasons.
+    # ports:
+    #   - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-superset} -d ${POSTGRES_DB:-superset}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache & Message Broker
+  superset-redis:
+    image: redis:7
+    container_name: superset-redis
+    restart: unless-stopped
+    environment:
+        <<: *redis_vars
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 6gb
+      --maxmemory-policy allkeys-lru
+      --save 60 1000
+      --appendonly yes
+    volumes: *redis_volumes
+    # Intentionally NOT exposing Superset directly for security reasons.
+    # ports:
+    #   - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Superset Database Initialization (Run once)
+  superset-init:
+    image: *superset_image
+    container_name: superset-init
+    environment:
+        <<: *superset_vars
+    command: ["/app/superset/entrypoint/init_db.sh"]
+    depends_on:
+      superset-postgres:
+        condition: service_healthy
+      superset-redis:
+        condition: service_healthy
+    volumes: *superset_volumes
+    restart: "no"
+
+  # Celery Worker for async tasks
+  superset-worker:
+    image: *superset_image
+    container_name: superset-worker
+    restart: unless-stopped
+    environment:
+        <<: *superset_vars
+    command: ["/app/superset/entrypoint/start_celery_worker.sh"]
+    depends_on:
+      superset-postgres:
+        condition: service_healthy
+      superset-redis:
+        condition: service_healthy
+      superset-init:
+        condition: service_completed_successfully
+      superset-app:
+        condition: service_healthy
+    shm_size: "2gb"
+    volumes: *superset_volumes
+    healthcheck:
+      test: ["CMD", "celery", "--app=superset.tasks.celery_app:app", "inspect", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Celery Beat Scheduler for scheduled tasks
+  superset-beat:
+    image: *superset_image
+    container_name: superset-beat
+    restart: unless-stopped
+    environment:
+        <<: *superset_vars
+    command: ["/app/superset/entrypoint/start_celery_beat.sh"]
+    depends_on:
+      superset-postgres:
+        condition: service_healthy
+      superset-redis:
+        condition: service_healthy
+      superset-init:
+        condition: service_completed_successfully
+      superset-app:
+        condition: service_healthy
+    volumes: *superset_volumes
+
+networks:
+  proxy:
+    name: superset-proxy
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  superset_keycloak_data:
+  superset_home:

@@ -1,0 +1,57 @@
+_min_copier_version: 9.11.3
+
+_exclude_templates:
+    - .env
+    - .git
+    - .gitignore
+    - .gitattributes
+    - .gitkeep
+    - copier.yml
+
+answers_file: config/install_answers.yml
+
+---
+
+!include config/install_questions.yml
+
+---
+
+# Prevent breaking user setups during updates.
+# Updates in subprojects, as we do here, need overwrite, so we must not replace
+# gitignored files!
+skip_if_exists:
+    - config/.env
+    # - config/superset_config.py # handled in tasks
+    # - docker/docker-comppose.yml # handled in tasks
+
+
+_tasks:
+    # unix
+    - command: "cp config/superset_config_sample.py config/superset_config.py"
+      when: "{{ _copier_conf.os != 'windows' and _copier_operation == 'copy' and copy_samples_yn }}"
+    - command: "cp docker/docker-compose-sample.yml docker/docker-compose.yml"
+      when: "{{ _copier_conf.os != 'windows' and _copier_operation == 'copy' and copy_samples_yn }}"
+
+    # win
+    - command: "cmd /c copy config\\superset_config_sample.py config\\superset_config.py"
+      when: "{{ _copier_conf.os == 'windows' and _copier_operation == 'copy' and copy_samples_yn }}"
+    - command: "cmd /c copy docker\\docker-compose-sample.yml docker\\docker-compose.yml"
+      when: "{{ _copier_conf.os == 'windows' and _copier_operation == 'copy' and copy_samples_yn }}"
+
+
+_message_after_copy: |
+
+    Superset folder structure created at "{{ _copier_conf.dst_path }}"
+
+    Next steps
+    ==========
+
+    - You must put 'superset_config.py' and '.env' into your .gitignore!
+
+    - Check your config/.env, it contains you given answers and generated passwords.
+
+    - Pull docker images:
+        docker compose -f ./docker/docker-compose-sample.yml pull
+
+    - Start the stack:
+        docker compose -f ./docker/docker-compose-sample.yml --env-file ./config/.env up superset-app

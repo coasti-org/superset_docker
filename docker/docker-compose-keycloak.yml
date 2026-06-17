@@ -1,0 +1,52 @@
+# Example override to add a keycloak container
+# run via `docker compose -f docker-compose.yml -f docker-compose-keycloak.yml up --build`
+
+services:
+
+  keycloak_web:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: keycloak_web
+    env_file:
+      - .env
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloakdb:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: password
+      KC_CACHE: local
+      KC_CACHE_STACK: default
+
+      KC_HTTP_ENABLED: true
+      KC_HOSTNAME: ${KEYCLOAK_DOMAIN:-keycloak.example.com}
+      KC_HOSTNAME_URL: https://${KEYCLOAK_DOMAIN:-keycloak.example.com}
+      # KC_HOSTNAME_PORT: 443
+      KC_HOSTNAME_STRICT: false
+      KC_HOSTNAME_STRICT_HTTPS: false
+      KC_PROXY: edge
+      KC_PROXY_HEADERS: xforwarded
+
+      KC_LOG_LEVEL: info
+      KC_METRICS_ENABLED: true
+      KC_HEALTH_ENABLED: true
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    command: start
+    depends_on:
+      - keycloakdb
+    ports:
+      - 8080:8080
+    networks:
+      - default
+      - proxy
+
+  keycloakdb:
+    image: postgres:15
+    volumes:
+      - keycloakdb_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: password
+
+volumes:
+  keycloakdb_data:

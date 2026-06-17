@@ -1,0 +1,63 @@
+# this file is included in /copier.yml and gets invoked during installation.
+# answers will be placed in /config/install_answers.yml
+
+domain_name:
+    help: "Domain of the superset instance"
+    default: "localhost"
+
+superset_secret_key:
+    help: "Superset secret key (generated randomly by default)"
+    secret: true
+    default: "{{ ( 64 | ans_random | hash('sha512') )[:64] }}"
+    # TODO: we would like to check if the file already exists in the destination
+    # but the requires file-io which is not a default jinja2 filter.
+
+superset_admin:
+    help: "Superset Admin User Name"
+    default: "admin"
+superset_password:
+    help: "Superset Admin User Password (generated randomly by default)"
+    secret: true
+    default: "{{ ( 64 | ans_random | hash('sha512') )[:16] }}"
+superset_admin_email:
+    help: "Superset Admin User Email (also used for caddy ssl certificates)"
+    default: "admin@example.com"
+
+configure_smtp_yn:
+    help: "Do you want to configure superset's email reports?"
+    type: bool
+    default: true
+
+smtp_host:
+    help: "SMTP Server Address (without port)"
+    default: ""
+    when: "{{ configure_smtp_yn }}"
+smtp_port:
+    help: "SMTP Server Port"
+    type: int
+    default: 587
+    when: "{{ configure_smtp_yn }}"
+smtp_user:
+    help: "SMTP User"
+    default: ""
+    when: "{{ configure_smtp_yn }}"
+smtp_password:
+    help: "SMTP Password"
+    secret: true
+    default: ""
+    when: "{{ configure_smtp_yn }}"
+
+copy_samples_yn:
+    help: |
+        Do you want to create a copy of the example configs for easier editing?
+           (config/superset_config.py and docker/docker-compose.yml)
+    type: bool
+    default: true
+
+# generate randomly, without user interaction
+postgres_password:
+    default: "{{ ( 64 | ans_random | hash('sha512') )[:64] }}"
+    when: false
+redis_password:
+    default: "{{ ( 64 | ans_random | hash('sha512') )[:64] }}"
+    when: false

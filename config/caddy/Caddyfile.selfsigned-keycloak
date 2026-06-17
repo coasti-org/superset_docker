@@ -1,0 +1,64 @@
+{
+	# Create an internal PKI and use it to issue certificates when using self-signed mode.
+	# This creates a root + intermediate CA automatically.
+	pki {
+		ca linkfish {
+			name "linkFISH Consulting CA for Caddy"
+			root_cn "linkFISH Consulting Root CA for Caddy"
+			intermediate_cn "linkFISH Consulting Intermediate CA for Caddy"
+			# Default intermediate lifetime is 7d; extend to 5 years.
+			intermediate_lifetime 1825d
+		}
+	}
+}
+
+{$DOMAIN_NAME} {
+	tls {
+		issuer internal {
+			ca linkfish
+			# Default leaf lifetime is 12h; extend to 3 years.
+			lifetime 1095d
+		}
+	}
+
+	reverse_proxy superset-app:8088 {
+        # Timeouts for long-running operations
+        transport http {
+            read_timeout 3600s
+            write_timeout 3600s
+        }
+    }
+}
+
+{$KEYCLOAK_DOMAIN} {
+	tls {
+		issuer internal {
+			ca linkfish
+			lifetime 1095d
+		}
+	}
+
+	reverse_proxy keycloak_web:8080 {
+		transport http {
+			read_timeout 3600s
+			write_timeout 3600s
+		}
+	}
+}
+
+test-{$DOMAIN_NAME} {
+	tls {
+		issuer internal {
+			ca linkfish
+			lifetime 1095d
+		}
+	}
+
+	reverse_proxy superset-app-test:8088 {
+        # Timeouts for long-running operations
+        transport http {
+            read_timeout 3600s
+            write_timeout 3600s
+        }
+    }
+}
