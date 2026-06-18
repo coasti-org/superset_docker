@@ -8,68 +8,17 @@ Branding by and for [coasti.org](https://coasti.org/).
 
 - Docker and Docker Compose installed
 - At least 4GB RAM available
-- Mapbox token for Mapbox card integration:
+- Optional: For Mapbox integration (to get backgrounds other than OpenStreetMap when plotting GeoJson):
     - register on mapbox (https://www.mapbox.com/)
     - navigate to Admin > Tokens and create a new token
     - set `MAPBOX_API_KEY` in `./config/.env` after the product is deployed
 
-## 🐳 Stack
-
-The stack consists of the following containers:
-- **Superset**:
-    - `superset-app` Main web application server
-    - `superset-worker` Celery background processing
-    - `superset-beat` Celery task scheduler
-    - `superset-init` Runs once during startup for database initialization and migration
-- **Database**
-    - `superset-postgres` PostgreSQL, for superset's metadata
-- **Caching**
-    - `superset-redis` Redis for caching and message broker for celery
-- **Reverse Proxy**
-    - `superset-caddy` Caddy manages the domain, address, ssl, tls etc
-
-## 📁 Directory Structure
-
-This container is usually installed via `coasti product install` and would reside in `/coasti/tools/superset_docker`. The overall coasti structure is:
-
-```
-/coasti/
-├── config/
-│   ├── secrets/          # Secret files
-│   ├── products.yml      # Enabled products
-│   ├── tools.yml         # Enabled tools
-│   └── [product]/        # Symlinks to product configs
-├── products/             # Product-specific files
-│   └── [product]/
-├── tools/                # Shared tools
-│   └── [tool]/
-├── data/
-│   ├── [product]/        # Symlinks to product data
-│   └── [tool]/           # Symlinks to tool data
-└── logs/
-    ├── [product]/
-    └── [tool]/
-```
-
-Superset-specific structure under `/coasti/tools/superset_docker`:
-
-```
-superset_docker/
-├── assets/         # Place for custom frontend assets such as images
-├── config/         # All configurations, like .env and superset_config.py
-├── docker/         # Container related resources
-├── modules/        # Custom modules to extend superset_configy.py
-├── data/           # Place datamart output here, mounted into containers
-├── logs/           # Runtime logs, mounted into containers
-└── scripts/        # Helpers to run on the host, e.g. cache reset
-```
-
 ## 🚀 Getting Started
 
-### Using the [coasti installer](https://github.com/linkFISH-Consulting/coasti_installer)
+### Using the [coasti installer](https://github.com/coasti-org/coasti_installer)
 
 ```bash
-coasti product add git@github.com:linkFISH-Consulting/superset_docker.git
+coasti product add git@github.com:coasti-org/superset_docker.git
 ```
 
 ### Using [copier](https://copier.readthedocs.io/en/stable/)
@@ -148,6 +97,7 @@ This follows [PEP440](https://peps.python.org/pep-0440/#adding-local-version-ide
 
 ## 📚 Further Reading
 
+- [docs/project_overview.md](docs/project_overview.md)
 - [docs/configuration.md](docs/configuration.md)
 - [docs/troubleshooting.md](docs/troubleshooting.md)
 - [docs/manual_setup.md](docs/manual_setup.md) (without copier)
