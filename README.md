@@ -75,7 +75,20 @@ coasti product add git@github.com:linkFISH-Consulting/superset_docker.git
 ### Using [copier](https://copier.readthedocs.io/en/stable/)
 
 ```bash
-copier copy git@github.com:linkFISH-Consulting/superset_docker.git /abs/path/to/superset_docker --trust
+copier copy git@github.com:coasti-org/superset_docker.git /abs/path/to/superset_docker --trust
+```
+### Manually
+
+```bash
+git clone git@github.com:coasti-org/superset_docker.git
+cd superset_docker
+
+# copy (and then edit) config files
+cp ./config/.env.jina ./config/.env
+cp ./config/superset_config_sample.py ./config/superset_config.py
+cp ./docker/docker-compose-sample.yml ./docker/docker-compose.yml
+
+docker compose --env-file ./config/.env -f ./docker/docker-compose.yml up
 ```
 
 ## 🔧 Deployment and Docker Cheat-Sheet
