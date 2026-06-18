@@ -87,7 +87,7 @@ This repo includes an optional Caddy reverse proxy setup in [docker-compose.cadd
 
 #### Self-signed mode (client trust required)
 
-If you run with `TLS_MODE=selfsigned`, Caddy generates a private Root + Intermediate CA ("linkFISH Consulting CA") and issues the site certificate from that CA.
+If you run with `TLS_MODE=selfsigned`, Caddy generates a private Root + Intermediate CA ("Coasti CA") and issues the site certificate from that CA.
 Clients must trust the generated **Root CA certificate** to avoid browser/OS TLS warnings.
 
 1) Export the generated CA certificates from the Caddy data volume:
@@ -96,10 +96,10 @@ Clients must trust the generated **Root CA certificate** to avoid browser/OS TLS
 # From the repo folder (where docker-compose.caddy.yml is)
 
 # Root CA (recommended to trust on clients)
-docker run --rm -v superset_caddy_data:/data -v "${PWD}:/out" alpine:3.20 sh -ec "cp /data/caddy/pki/authorities/linkfish/root.crt /out/linkfish-root-ca.crt"
+docker run --rm -v superset_caddy_data:/data -v "${PWD}:/out" alpine:3.20 sh -ec "cp /data/caddy/pki/authorities/coasti/root.crt /out/coasti-root-ca.crt"
 
 # Intermediate CA (usually not required to trust explicitly)
-docker run --rm -v superset_caddy_data:/data -v "${PWD}:/out" alpine:3.20 sh -ec "cp /data/caddy/pki/authorities/linkfish/intermediate.crt /out/linkfish-intermediate-ca.crt"
+docker run --rm -v superset_caddy_data:/data -v "${PWD}:/out" alpine:3.20 sh -ec "cp /data/caddy/pki/authorities/coasti/intermediate.crt /out/coasti-intermediate-ca.crt"
 ```
 
 2) Import on clients:
@@ -107,29 +107,29 @@ docker run --rm -v superset_caddy_data:/data -v "${PWD}:/out" alpine:3.20 sh -ec
 - Windows (trust Root CA):
 
 ```powershell
-certutil -addstore -f Root linkfish-root-ca.crt
+certutil -addstore -f Root coasti-root-ca.crt
 ```
 
 - Linux (Debian/Ubuntu):
 
 ```bash
-sudo cp linkfish-root-ca.crt /usr/local/share/ca-certificates/linkfish-root-ca.crt
+sudo cp coasti-root-ca.crt /usr/local/share/ca-certificates/coasti-root-ca.crt
 sudo update-ca-certificates
 ```
 
 - Linux (RHEL/Fedora/CentOS):
 
 ```bash
-sudo cp linkfish-root-ca.crt /etc/pki/ca-trust/source/anchors/linkfish-root-ca.crt
+sudo cp coasti-root-ca.crt /etc/pki/ca-trust/source/anchors/coasti-root-ca.crt
 sudo update-ca-trust
 ```
 
 - macOS / iOS
 
-1. Copy `linkfish-root-ca.crt` to your Mac/iPhone.
+1. Copy `coasti-root-ca.crt` to your Mac/iPhone.
 2. Install on macOS via double‑click → Keychain → System → Always Trust.
 3. Install on iOS as a profile, then go to:
-Settings → General → About → Certificate Trust Settings → enable full trust for `linkfish-root-ca.crt`.
+Settings → General → About → Certificate Trust Settings → enable full trust for `coasti-root-ca.crt`.
 
 
 Notes:
@@ -149,15 +149,15 @@ Important:
 
 ```powershell
 # Creates 4 files in the current folder:
-# - linkfish-root-ca.crt
-# - linkfish-root-ca.key
-# - linkfish-intermediate-ca.crt
-# - linkfish-intermediate-ca.key
+# - coasti-root-ca.crt
+# - coasti-root-ca.key
+# - coasti-intermediate-ca.crt
+# - coasti-intermediate-ca.key
 docker run --rm -v superset_caddy_data:/data -v "${PWD}:/out" alpine:3.20 sh -ec "\
-   cp /data/caddy/pki/authorities/linkfish/root.crt /out/linkfish-root-ca.crt && \
-   cp /data/caddy/pki/authorities/linkfish/root.key /out/linkfish-root-ca.key && \
-   cp /data/caddy/pki/authorities/linkfish/intermediate.crt /out/linkfish-intermediate-ca.crt && \
-   cp /data/caddy/pki/authorities/linkfish/intermediate.key /out/linkfish-intermediate-ca.key"
+   cp /data/caddy/pki/authorities/coasti/root.crt /out/coasti-root-ca.crt && \
+   cp /data/caddy/pki/authorities/coasti/root.key /out/coasti-root-ca.key && \
+   cp /data/caddy/pki/authorities/coasti/intermediate.crt /out/coasti-intermediate-ca.crt && \
+   cp /data/caddy/pki/authorities/coasti/intermediate.key /out/coasti-intermediate-ca.key"
 ```
 
 2) Securely transfer those 4 files to the machine that will run the other Caddy instance.
@@ -169,15 +169,15 @@ docker run --rm \
    -v <TARGET_CADDY_DATA_VOLUME>:/data \
    -v "${PWD}:/in" \
    alpine:3.20 sh -ec "\
-      mkdir -p /data/caddy/pki/authorities/linkfish && \
-      cp /in/linkfish-root-ca.crt /data/caddy/pki/authorities/linkfish/root.crt && \
-      cp /in/linkfish-root-ca.key /data/caddy/pki/authorities/linkfish/root.key && \
-      cp /in/linkfish-intermediate-ca.crt /data/caddy/pki/authorities/linkfish/intermediate.crt && \
-      cp /in/linkfish-intermediate-ca.key /data/caddy/pki/authorities/linkfish/intermediate.key && \
-      chmod 600 /data/caddy/pki/authorities/linkfish/*.key"
+      mkdir -p /data/caddy/pki/authorities/coasti && \
+      cp /in/coasti-root-ca.crt /data/caddy/pki/authorities/coasti/root.crt && \
+      cp /in/coasti-root-ca.key /data/caddy/pki/authorities/coasti/root.key && \
+      cp /in/coasti-intermediate-ca.crt /data/caddy/pki/authorities/coasti/intermediate.crt && \
+      cp /in/coasti-intermediate-ca.key /data/caddy/pki/authorities/coasti/intermediate.key && \
+      chmod 600 /data/caddy/pki/authorities/coasti/*.key"
 ```
 
-4) Ensure the target Caddy config uses the same CA id (`ca linkfish`) and start the stack.
+4) Ensure the target Caddy config uses the same CA id (`ca coasti`) and start the stack.
 
 ### OAuth via Keycloak
 

@@ -6,7 +6,7 @@ acme|ACME)
     echo "[caddy] TLS_MODE=${TLS_MODE_VALUE} -> Using Let's Encrypt/ACME config";
     cp -f /etc/caddy/Caddyfile.acme /etc/caddy/Caddyfile ;;
 selfsigned|SELF_SIGNED|self-signed)
-    echo "[caddy] TLS_MODE=${TLS_MODE_VALUE} -> Using internal PKI config (linkFISH Consulting CA)";
+    echo "[caddy] TLS_MODE=${TLS_MODE_VALUE} -> Using internal PKI config (Coasti CA)";
     cp -f /etc/caddy/Caddyfile.selfsigned /etc/caddy/Caddyfile ;;
 internal|INTERNAL|custom|CUSTOM)
     echo "[caddy] TLS_MODE=${TLS_MODE_VALUE} -> Using custom certificate config";

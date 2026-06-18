@@ -2,10 +2,10 @@
 	# Create an internal PKI and use it to issue certificates when using self-signed mode.
 	# This creates a root + intermediate CA automatically.
 	pki {
-		ca linkfish {
-			name "linkFISH Consulting CA for Caddy"
-			root_cn "linkFISH Consulting Root CA for Caddy"
-			intermediate_cn "linkFISH Consulting Intermediate CA for Caddy"
+		ca coasti {
+			name "Coasti CA for Caddy"
+			root_cn "Coasti Root CA for Caddy"
+			intermediate_cn "Coasti Intermediate CA for Caddy"
 			# Default intermediate lifetime is 7d; extend to 5 years.
 			intermediate_lifetime 1825d
 		}
@@ -15,7 +15,7 @@
 {$DOMAIN_NAME} {
 	tls {
 		issuer internal {
-			ca linkfish
+			ca coasti
 			# Default leaf lifetime is 12h; extend to 3 years.
 			lifetime 1095d
 		}
@@ -33,7 +33,7 @@
 {$KEYCLOAK_DOMAIN} {
 	tls {
 		issuer internal {
-			ca linkfish
+			ca coasti
 			lifetime 1095d
 		}
 	}
@@ -49,7 +49,7 @@
 test-{$DOMAIN_NAME} {
 	tls {
 		issuer internal {
-			ca linkfish
+			ca coasti
 			lifetime 1095d
 		}
 	}

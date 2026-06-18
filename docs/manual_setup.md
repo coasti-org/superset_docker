@@ -5,7 +5,7 @@ Instead of using copier, you can manually follow these steps:
 
 ```bash
 # Clone the repo
-git clone git@github.com:linkFISH-Consulting/superset_docker.git
+git clone git@github.com:coasti-org/superset_docker.git
 cd superset_docker
 
 # Copy Docker Compose template
