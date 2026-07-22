@@ -102,6 +102,98 @@ Date:
 
 ##  4. Changelog
 
+### *0.1.4+superset.6.1.0 -> 0.2.0+superset.6.1.0*
+
+Date: 2026-07-22
+
+### Scope
+- [ ] Superset version changed
+- [x] Wrapper version changed (breaking — read before updating!)
+
+### Required migration steps (in order)
+
+1. **Release ordering (developers):** push the `0.2.0+superset.6.1.0` git tag
+   and let CI publish the images *before* deploying anywhere — the new compose
+   file references both `0.2.0-superset.6.1.0` and `0.2.0-superset.6.1.0-worker`,
+   which do not exist until CI has built them.
+
+2. **Re-copy the config and compose files.** Both changed structurally:
+```bash
+   cp ./config/.env.jinja ./config/.env            # then re-fill your values!
+   cp ./config/superset_config_sample.py ./config/superset_config.py  # re-apply local edits
+   cp ./docker/docker-compose-sample.yml ./docker/docker-compose.yml
+```
+
+3. **`.env`: verify required secrets are set.** The stack now fails fast if
+   `SUPERSET_SECRET_KEY`, `SUPERSET_PASSWORD`, `POSTGRES_PASSWORD` or
+   `REDIS_PASSWORD` are unset — there are no insecure fallbacks anymore.
+   Keep your *existing* values (especially `SUPERSET_SECRET_KEY` and
+   `POSTGRES_PASSWORD`), otherwise sessions and DB access break.
+
+4. **`.env`: pick a resource profile.** Defaults now target a production
+   machine (4 CPU / 16GB RAM). On a small host (2 vCPU / 4GB RAM), uncomment
+   the **tight profile** blocks — both the concurrency block (workers/threads/
+   celery) *and* the memory block. Do not mix profiles.
+
+5. **DuckDB connections (if used):** in every DuckDB database connection
+   (Advanced -> Engine Parameters), set an explicit memory cap — DuckDB now
+   runs inside memory-limited containers and otherwise sizes itself to host
+   RAM and gets OOM-killed:
+```json
+   {"connect_args": {"config": {"memory_limit": "512MB", "threads": 2,
+     "temp_directory": "/app/superset_home/duckdb_tmp"}, "read_only": true}}
+```
+   (Tight profile: `"memory_limit": "256MB", "threads": 1`.)
+
+6. **Update host-side tooling that references container names.** Fixed
+   `container_name`s were removed; containers are now named by compose
+   (`superset-app-1`, ...). Replace `docker exec/logs/restart superset-app`
+   with `docker compose ... exec/logs/restart superset-app` in cron jobs,
+   backup scripts, and monitoring. Check `scripts/backup.sh` and
+   `scripts/reset_cache.sh` in your deployment.
+
+7. **Replace `reset_cache.sh` with the version shipped in this release.** The
+   old script used `FLUSHALL` (now wipes queued reports/alerts, since the
+   Redis instance also holds the celery broker) and fixed container names.
+   The new script flushes only the cache DBs (`1`-`6`, `8`), works via
+   `docker compose`, and no longer restarts services by default — pass
+   `--restart` in your cron line if you want to keep the nightly recycle.
+
+8. **Port access:** Superset is no longer published on host port `8088`; all
+   access goes through Caddy at `https://<DOMAIN_NAME>`. Anything that hit
+   `http://<host>:8088` directly (health monitors, io-tools, bookmarks) must
+   switch to the Caddy endpoint or use the commented loopback binding.
+
+### Backend
+- `docker-compose`: two image flavors (`<version>` and `<version>-worker`);
+  worker/beat/app dependency graph loosened; memory limits on all services;
+  logs to stdout with docker-side rotation; postgres/redis/caddy pinned to
+  minor versions.
+- Redis: eviction policy `allkeys-lru` -> `volatile-lru` (queued celery tasks
+  can no longer be evicted). DB layout: explore form data db 0 -> 6, celery
+  result backend db 0 -> 10, distributed coordination db 1 -> 9. All moved DBs
+  hold transient data — no migration needed, but in-flight async queries and
+  unfinished report runs at the moment of the update are lost (do the update
+  in a maintenance window as usual).
+- `superset_config.py`: `worker_prefetch_multiplier` 10 -> 1; log level via
+  `LOG_LEVEL` env (default INFO, was DEBUG); gunicorn timeout raised to 180
+  to match `SUPERSET_WEBSERVER_TIMEOUT`.
+- Entrypoints: gunicorn now honors `SERVER_WORKER_AMOUNT` /
+  `SERVER_THREADS_AMOUNT` (previously hardcoded 4 workers). If you relied on
+  the hardcoded value while your `.env` said something else, your worker count
+  changes now.
+- init is idempotent; repeated `up` no longer trips over the existing admin.
+
+### Frontend (Charts, Dashboards, etc.)
+- no changes
+
+### Notes
+- Wrapper-only release: the Superset version stays 6.1.0, so no metadata DB
+  migration beyond the usual `superset db upgrade` no-op.
+- Existing volumes (`postgres_data`, `redis_data`, `superset_home`) are kept
+  and compatible; nothing is renamed.
+
+
 ### *0.1.2+superset.6.0.0 -> 0.1.3+superset.6.1.0*
 
 ### Scope

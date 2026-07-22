@@ -7,44 +7,70 @@ Branding by and for [coasti.org](https://coasti.org/).
 ## 📋 Prerequisites
 
 - Docker and Docker Compose installed
-- At least 4GB RAM available
+- RAM: the default settings target a production machine (4 CPU / 16GB RAM).
+  For small hosts (2 vCPU / 4GB RAM), switch to the tight profile — it is
+  included as commented blocks in `./config/.env` (concurrency *and* memory
+  settings; uncomment both).
 - Optional: For Mapbox integration (to get backgrounds other than OpenStreetMap when plotting GeoJson):
-    - register on mapbox (https://www.mapbox.com/)
-    - navigate to Admin > Tokens and create a new token
-    - set `MAPBOX_API_KEY` in `./config/.env` after the product is deployed
+  * register on mapbox (<https://www.mapbox.com/>)
+  * navigate to Admin > Tokens and create a new token
+  * set `MAPBOX_API_KEY` in `./config/.env` after the product is deployed
+
+## 🐳 Images
+
+Two image flavors are published per release:
+
+- `ghcr.io/coasti-org/superset_docker:<version>` — web server, init, and beat
+- `ghcr.io/coasti-org/superset_docker:<version>-worker` — adds Playwright/Chromium for Alerts & Reports screenshots
+
+The compose file references both; you normally don't need to pull them manually.
 
 ## 🚀 Getting Started
 
 ### Using the [coasti installer](https://github.com/coasti-org/coasti_installer)
 
-```bash
+```
 coasti product add git@github.com:coasti-org/superset_docker.git
 ```
 
 ### Using [copier](https://copier.readthedocs.io/en/stable/)
 
-```bash
+```
 copier copy git@github.com:coasti-org/superset_docker.git /abs/path/to/superset_docker --trust
 ```
+
 ### Manually
 
-```bash
+```
 git clone git@github.com:coasti-org/superset_docker.git
 cd superset_docker
 
 # copy (and then edit) config files
-cp ./config/.env.jina ./config/.env
+cp ./config/.env.jinja ./config/.env
 cp ./config/superset_config_sample.py ./config/superset_config.py
 cp ./docker/docker-compose-sample.yml ./docker/docker-compose.yml
 
 docker compose --env-file ./config/.env -f ./docker/docker-compose.yml up
 ```
 
+**Note:** the stack fails fast if required secrets (`SUPERSET_SECRET_KEY`,
+`SUPERSET_PASSWORD`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`) are not set in
+your `.env` — this is intentional, there are no insecure defaults.
+
+Superset is reachable **only through Caddy** at `https://<DOMAIN_NAME>`; port
+8088 is not published to the host. For local debugging, a commented loopback
+port mapping is available in the compose file.
+
 ## 🔧 Deployment and Docker Cheat-Sheet
 
 The commands below assume that you made a copy of `./docker/docker-compose-sample.yml` to `./docker/docker-compose.yml`.
 
-```bash
+Container names are managed by compose (e.g. `superset-app-1`), so use
+`docker compose ... <command> <service-name>` instead of plain `docker`
+commands with fixed container names. This also keeps the commands working when
+scaling services.
+
+```
 # pull the images
 docker compose -f ./docker/docker-compose.yml pull
 
@@ -58,13 +84,16 @@ set -a; source ./config/.env; set +a
 docker compose -f ./docker/docker-compose.yml up -d
 
 # connect to a running container to explore what is happening
-docker exec -it superset-app bash
+docker compose -f ./docker/docker-compose.yml exec superset-app bash
 
-# view logs for a specific container
-docker logs -f superset-app
+# view logs for a specific service (all logs go to stdout/stderr)
+docker compose -f ./docker/docker-compose.yml logs -f superset-app
 
-# restart a container
-docker restart superset-app
+# restart a service
+docker compose -f ./docker/docker-compose.yml restart superset-app
+
+# run a second celery worker (e.g. during heavy report load)
+docker compose -f ./docker/docker-compose.yml up -d --scale superset-worker=2
 
 # stop all containers of the stack
 docker compose -f ./docker/docker-compose.yml down
@@ -73,27 +102,47 @@ docker compose -f ./docker/docker-compose.yml down
 docker compose -f ./docker/docker-compose.yml down -v  # WARNING: This deletes all data
 ```
 
+## 🦆 DuckDB as a data source
 
+If your marts are DuckDB files (mounted via `../data:/data`), note that DuckDB
+runs **in-process** inside the superset containers — they are your query
+engine. Two things are required:
+
+1. In every DuckDB connection (Advanced → Engine Parameters), set an explicit
+   memory cap and read-only access:
+
+   ```json
+   {"connect_args": {"config": {"memory_limit": "512MB", "threads": 2,
+     "temp_directory": "/app/superset_home/duckdb_tmp"}, "read_only": true}}
+   ```
+
+   Without `memory_limit`, DuckDB sizes itself to the **host's** RAM and gets
+   the container OOM-killed. `read_only` avoids file-lock conflicts between
+   the app, the worker, and whatever process writes your marts.
+
+2. Size `SUPERSET_APP_MEM_LIMIT` / `SUPERSET_WORKER_MEM_LIMIT` in `.env` as
+   `baseline + (memory_limit × concurrent queries)` — see the comments in
+   `./config/.env` for worked examples per profile.
 
 ## 🆙 Updating
 
-```bash
+```
 coasti product update superset_docker
 
 copier update -a /abs/path/to/superset_docker/config/install_answers.yml
 ```
 
+See [UPGRADING.md](UPGRADING.md) for version-specific migration notes
+(0.2.0 in particular changes container names, published ports, and `.env`
+requirements).
 
 **Note on Version numbers:**
 
 Our Versioning adheres to [semver](https://semver.org/).
 Since we essentially just wrap superset, we include their version as metatag, so it is remains easy to spot which version of superset is included.
 
-E.g. `0.1.2+superset.6.0.0` means superset version 6.0.0, while our wrapping codes are at 0.1.2.
+E.g. `0.2.0+superset.6.1.0` means superset version 6.1.0, while our wrapping codes are at 0.2.0.
 This follows [PEP440](https://peps.python.org/pep-0440/#adding-local-version-identifiers) ([Regex Check](https://peps.python.org/pep-0440/#appendix-b-parsing-version-strings-with-regular-expressions)), which is a bit more restrictive than plain semver, but is required to support updates via copier.
-
-
-
 
 ## 📚 Further Reading
 
