@@ -127,7 +127,7 @@ services:
     command: ["/app/superset/entrypoint/start_superset.sh"]
     # Intentionally NOT exposing Superset directly; access it via Caddy.
     ports:
-      - "8088:8088"
+      - "127.0.0.1:8088:8088"
     networks:
       - default
       - proxy
