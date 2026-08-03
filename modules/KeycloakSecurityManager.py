@@ -87,7 +87,7 @@ OAUTH_PROVIDERS = [
 def _build_auth_roles_mapping():
     """Build a mapping of Superset role -> list of Keycloak roles from YAML.
 
-    The YAML file may define `auth_role_mappings` as KeycloakRole: SupersetRole
+    The YAML file defines `auth_role_mappings` as KeycloakRole: SupersetRole
     or KeycloakRole: [SupersetRoleA, SupersetRoleB]. This function inverts
     that mapping into the shape expected by Superset: {sup_role: [kc_roles...]}
     """
