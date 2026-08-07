@@ -25,6 +25,7 @@ We keep track of the superset version (first part) and our wrapping for coasti (
 ### Fixed
 
 - Mapbox API Key Warning. We no longer have `MAPBOX_API_KEY` as a default env var. To enable, re-add it to your .env and docker compose.
+- By default, we no longer set the vars for SSL Certificates and CA in the `.env` (only needed for keycloak). This fixes e.g. pip installs.
 
 ## 0.1.4+superset.6.1.0 - 2026-06-17
 
