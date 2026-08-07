@@ -19,6 +19,10 @@ We keep track of the superset version (first part) and our wrapping for coasti (
 
 - Removed auto-release workflow, because we were not using it.
 
+### Fixed
+
+- Mapbox API Key Warning. We no longer have `MAPBOX_API_KEY` as a default env var. To enable, re-add it to your .env and docker compose.
+
 ## 0.1.4+superset.6.1.0 - 2026-06-17
 
 - Workaround: added entry to themes in the sample `superset_config.py` so that a custom `LOGO_TARGET_PATH` is respected.
