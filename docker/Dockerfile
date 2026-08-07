@@ -46,7 +46,9 @@ RUN . /app/.venv/bin/activate && \
     psycopg2-binary==2.9.12 \
     duckdb-engine==0.17.0 \
     duckdb==1.5.3 \
-    pymssql==2.3.13
+    pymssql==2.3.13 \
+    # enable supersets buildin mcp
+    fastmcp==3.4.6
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/usr/local/share/playwright-browsers
 

@@ -14,6 +14,9 @@ We keep track of the superset version (first part) and our wrapping for coasti (
 
 ## Upcoming
 
+### New
+
+- `superset-mcp` container, that can be launched separately, and allows access to supersets buildin mcp server.
 
 ### Dev
 
