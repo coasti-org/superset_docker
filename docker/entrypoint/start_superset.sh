@@ -42,6 +42,12 @@ echo "Starting Superset Web Server..."
 # SERVER_THREADS_AMOUNT) — previously documented but silently ignored.
 # GUNICORN_TIMEOUT defaults to 180 to match SUPERSET_WEBSERVER_TIMEOUT in
 # superset_config.py (it was 120, killing long queries 60s early).
+# GUNICORN_KEEPALIVE must stay ABOVE Caddy's upstream idle timeout
+# (config/caddy/Caddyfile.*: keep_alive idle_timeout 60s) so Caddy is always
+# the side that closes a pooled connection. The old value of 2s let gunicorn
+# close conns Caddy still considered usable; the resulting race surfaces as
+# sporadic 502s on non-retryable requests (POST /api/v1/chart/data, SQL Lab).
+# Idle keep-alive conns are parked on gthread's poller and hold no thread.
 exec gunicorn \
     --bind "0.0.0.0:8088" \
     --access-logfile - \
@@ -50,7 +56,7 @@ exec gunicorn \
     --workers "${SERVER_WORKER_AMOUNT:-4}" \
     --threads "${SERVER_THREADS_AMOUNT:-20}" \
     --timeout "${GUNICORN_TIMEOUT:-180}" \
-    --keep-alive 2 \
+    --keep-alive "${GUNICORN_KEEPALIVE:-75}" \
     --max-requests 1000 \
     --max-requests-jitter 100 \
     --limit-request-line 8190 \

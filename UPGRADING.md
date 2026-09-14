@@ -204,6 +204,11 @@ Date: 2026-07-22
   `SERVER_THREADS_AMOUNT` (previously hardcoded 4 workers). If you relied on
   the hardcoded value while your `.env` said something else, your worker count
   changes now.
+- gunicorn keep-alive 2s -> 75s (`GUNICORN_KEEPALIVE`) and Caddy's upstream
+  idle timeout pinned to `keepalive 60s`. Previously gunicorn closed pooled
+  connections Caddy still held, causing sporadic 502s on chart-data/SQL Lab
+  POSTs. No operator action: the Caddyfiles are bind-mounted from the repo and
+  the compose file supplies the default.
 - init is idempotent; repeated `up` no longer trips over the existing admin.
 - Keycloak (`modules/KeycloakSecurityManager.py`): `auth_role_mappings` is now
   read in the correct direction (`KeycloakRole: SupersetRole`) and handed to

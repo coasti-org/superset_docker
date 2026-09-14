@@ -117,6 +117,12 @@ before updating an existing deployment.
   11.3.0). `docker/requirements.txt` only lists packages the base image does
   not already ship, so superset's own pins for `celery`, `redis`,
   `itsdangerous` and `pillow` are left intact.
+- Sporadic 502s behind Caddy: gunicorn's keep-alive was 2s while Caddy pools
+  idle upstream connections for 2 minutes, so gunicorn closed connections
+  Caddy still considered usable. Requests that Go's transport will not replay
+  (`POST /api/v1/chart/data`, SQL Lab) surfaced the race as a 502 (Bad Gateway
+  errors). gunicorn now defaults to 75s (`GUNICORN_KEEPALIVE`) and the Caddyfiles pin
+  `keepalive 60s`, so Caddy is always the side that closes.
 
 ### Dev
 
