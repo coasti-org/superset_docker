@@ -164,6 +164,28 @@ Date: 2026-07-22
    `http://<host>:8088` directly (health monitors, io-tools, bookmarks) must
    switch to the Caddy endpoint or use the commented loopback binding.
 
+9. **Keycloak: flip `auth_role_mappings` in `keycloak_clients.yml`.** The
+   mapping direction was documented and implemented backwards. It is now
+   **`KeycloakRole: SupersetRole`** (left = Keycloak, right = Superset), which
+   is the shape Flask-AppBuilder's `AUTH_ROLES_MAPPING` actually expects.
+   Because `AUTH_ROLES_SYNC_AT_LOGIN` is enabled for Keycloak deployments, an
+   un-flipped file resolves to the wrong roles on the *next login* — users can
+   end up with `AUTH_USER_REGISTRATION_ROLE` (`Public`) instead of their real
+   role. Edit the file before restarting:
+```yaml
+   # before (0.1.x)            # after (0.2.0)
+   auth_role_mappings:         auth_role_mappings:
+     Admin: superset_admin       superset_admin: Admin
+     Alpha: superset_alpha       superset_alpha: Alpha
+     Gamma: superset_gamma       superset_gamma: Gamma
+```
+   A Keycloak role may map to several Superset roles by using a list on the
+   right (`superset_admin: [Admin, Alpha]`). `role_based_redirections` is
+   unaffected — it was already keyed by Superset role name.
+   Verify after the update: log in with a test user per role and check
+   Settings -> List Users, or watch `docker compose logs superset-app` for the
+   `AUTH_ROLES_MAPPING resolved to:` line (needs `LOG_LEVEL=DEBUG`).
+
 ### Backend
 - `docker-compose`: two image flavors (`<version>` and `<version>-worker`);
   worker/beat/app dependency graph loosened; memory limits on all services;
@@ -183,6 +205,16 @@ Date: 2026-07-22
   the hardcoded value while your `.env` said something else, your worker count
   changes now.
 - init is idempotent; repeated `up` no longer trips over the existing admin.
+- Keycloak (`modules/KeycloakSecurityManager.py`): `auth_role_mappings` is now
+  read in the correct direction (`KeycloakRole: SupersetRole`) and handed to
+  Flask-AppBuilder's own role sync instead of being pre-mapped in
+  `oauth_user_info` (which double-mapped and could resolve to no role at all).
+  See migration step 9 — this requires an edit to `keycloak_clients.yml`.
+- Keycloak: `keycloak_clients.yml` is re-read on change (cached by file mtime),
+  so `auth_role_mappings` and `role_based_redirections` edits take effect on
+  the next login / request without restarting the container. The connection
+  settings (`host`, `realm`, `client_id`, `client_secret`) are still read once
+  at startup and *do* need a restart.
 
 ### Frontend (Charts, Dashboards, etc.)
 - no changes
@@ -192,6 +224,10 @@ Date: 2026-07-22
   migration beyond the usual `superset db upgrade` no-op.
 - Existing volumes (`postgres_data`, `redis_data`, `superset_home`) are kept
   and compatible; nothing is renamed.
+- Keycloak deployments: no metadata changes, but user role assignments are
+  re-synced at the next login from `auth_role_mappings`. Do step 9 *before*
+  `docker compose up -d`, or the first logins will overwrite correct role
+  assignments with wrong ones.
 
 
 ### *0.1.2+superset.6.0.0 -> 0.1.3+superset.6.1.0*

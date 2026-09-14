@@ -41,6 +41,10 @@ before updating an existing deployment.
   instead of silently falling back to insecure defaults.
 - Removed the `EXTRA_GIDS` build-arg; grant extra groups at runtime via
   `group_add:` in compose instead of baking host-specific GIDs into the image.
+- Keycloak `auth_role_mappings` in `keycloak_clients.yml` changed direction:
+  it is now `KeycloakRole: SupersetRole` (was documented as the reverse).
+  Existing files must be flipped or users get the wrong roles at the next
+  login — see step 9 in `UPGRADING.md`.
   
 ### Added
  
@@ -55,35 +59,43 @@ before updating an existing deployment.
 - `LOG_LEVEL` env var controlling superset + celery log level (default INFO).
 - `CELERY_WORKER_CONCURRENCY` and `SUPERSET_WORKER_SHM_SIZE` env vars.
 - CI: SBOM and provenance attestations for published images.
+- Keycloak: `keycloak_clients.yml` is re-read when it changes (cached by file
+  mtime), so `auth_role_mappings` and `role_based_redirections` edits apply on
+  the next login/request without a container restart. Connection settings
+  (`host`, `realm`, `client_id`, `client_secret`) still require a restart.
 ### Changed
  
-- Redis eviction policy changed from `allkeys-lru` to `volatile-lru`: only
-  TTL'd cache keys are evicted, so queued Celery tasks (reports/alerts) can no
-  longer be silently dropped under memory pressure. If unevictable keys ever
-  fill `maxmemory`, Redis fails writes loudly — raise `REDIS_MAXMEMORY` then.
-- Redis DB layout reorganized so every consumer has its own DB: explore form
-  data moved db 0 -> 6 (it collided with the Celery broker), celery result
-  backend db 0 -> 10, distributed coordination db 1 -> 9 (it collided with the
-  thumbnail cache). These hold transient data; no migration needed.
-- Celery `worker_prefetch_multiplier` 10 -> 1: long-running report tasks no
-  longer hoard the queue, and crashes no longer redeliver large batches.
-- All processes log to stdout/stderr; rotation is handled by the Docker
-  logging driver (json-file, 20m x 5) instead of unbounded files in `logs/`.
-- gunicorn's unlimited request line/header sizes replaced with generous finite
-  limits.
-- Loosened the compose dependency graph: the app no longer waits on Caddy,
-  worker/beat no longer wait on the app. Faster, less coupled startup.
-- Entrypoint wait loops are bounded (fail after 3 minutes instead of forever)
-  and use `REDISCLI_AUTH`, keeping the Redis password out of `ps` output.
-- Infra images pinned to minor versions (postgres:17.5, redis:7.4, caddy:2.10).
-- Dockerfile base version is an `ARG` derived by CI from the `VERSION` file,
-  so the two can no longer drift apart.
-- Dropped from the image: build toolchain (`build-essential`, `libpq-dev`),
-  source-built `psycopg2` (the pinned `-binary` wheel remains), unused
-  `gevent`, `libaio1`, `wget`.
-- CI: `latest` and `stable` tags only move on real releases (previously
-  `test-*` tags also moved `latest`); base image digest refreshed via
-  `pull: true`.
+- Redis now only evicts keys that have a TTL (`volatile-lru`, was
+  `allkeys-lru`). This protects queued Celery tasks (reports/alerts) from
+  being silently dropped when memory is low. If Redis still runs out of
+  space, it will now reject writes with an error instead — raise
+  `REDIS_MAXMEMORY` if that happens.
+- Redis databases were reorganized so each consumer gets its own DB number,
+  fixing two collisions (explore form data vs. the Celery broker, and
+  distributed coordination vs. the thumbnail cache). All affected data is
+  transient, so no migration is needed.
+- Celery workers now prefetch only 1 task at a time instead of 10
+  (`worker_prefetch_multiplier`), so long-running report tasks don't hog the
+  queue and a crash no longer requeues a large batch at once.
+- Logging moved from files in `logs/` to stdout/stderr, with rotation handled
+  by Docker's own logging driver (json-file, 20m x 5 files).
+- gunicorn's request line/header size limits are now finite (but generous)
+  instead of unlimited.
+- Services start up faster and with fewer dependencies: the app no longer
+  waits for Caddy, and worker/beat no longer wait for the app.
+- Entrypoint wait loops now time out after 3 minutes instead of waiting
+  forever, and use `REDISCLI_AUTH` so the Redis password no longer shows up
+  in `ps` output.
+- Infra images are pinned to specific minor versions (postgres:17.5,
+  redis:7.4, caddy:2.10).
+- The Dockerfile's base image version is now derived from the `VERSION` file
+  by CI, so the two can't drift apart.
+- Removed from the image to reduce its size: the build toolchain
+  (`build-essential`, `libpq-dev`), source-built `psycopg2` (the pinned
+  `-binary` wheel remains), and unused `gevent`, `libaio1`, `wget`.
+- CI: the `latest` and `stable` tags now only move on real releases (before,
+  `test-*` builds could also move `latest`); the base image is now always
+  freshly pulled.
 ### Fixed
  
 - `SERVER_WORKER_AMOUNT` / `SERVER_THREADS_AMOUNT` are now actually applied;
@@ -94,6 +106,17 @@ before updating an existing deployment.
   refusing to start.
 - CRLF normalization moved fully to `.gitattributes`; removed the redundant
   `sed` from the Dockerfile.
+- Keycloak role mapping actually works: `oauth_user_info` no longer pre-maps
+  realm roles before handing them to Flask-AppBuilder's role sync (the value
+  was mapped twice and could resolve to no Superset role at all). It now
+  returns the raw realm roles and lets `AUTH_ROLES_MAPPING` do the lookup.
+- `load_user_jwt` no longer raises `AttributeError` on an unknown username;
+  the `None` user is rejected before `is_active` is read. Keycloak log lines
+  are prefixed with the username.
+- The image no longer downgrades `pillow` to 10.3.0 (superset 6.1.0 pins
+  11.3.0). `docker/requirements.txt` only lists packages the base image does
+  not already ship, so superset's own pins for `celery`, `redis`,
+  `itsdangerous` and `pillow` are left intact.
 
 ### Dev
 
