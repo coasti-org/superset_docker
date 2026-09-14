@@ -73,8 +73,6 @@ x-templates:
     SERVER_WORKER_AMOUNT: ${SERVER_WORKER_AMOUNT}
     SERVER_THREADS_AMOUNT: ${SERVER_THREADS_AMOUNT}
 
-    MAPBOX_API_KEY: ${MAPBOX_API_KEY}
-
     NO_PROXY: ${NO_PROXY}
 
     SMTP_USER: ${SMTP_USER}
@@ -149,6 +147,40 @@ services:
       retries: 3
       start_period: 60s
 
+  superset-mcp:
+    image: *superset_image
+    container_name: superset-mcp
+    restart: unless-stopped
+    environment:
+        <<: *superset_vars
+    command: ["superset", "mcp", "run", "--host", "0.0.0.0", "--port", "5008"]
+    ports:
+      - "5008:5008"
+    networks:
+      - default
+      - proxy
+    depends_on:
+      superset-caddy:
+        condition: service_healthy
+      superset-postgres:
+        condition: service_healthy
+      superset-redis:
+        condition: service_healthy
+      superset-init:
+        condition: service_completed_successfully
+    shm_size: "2gb"
+    volumes: *superset_volumes
+    healthcheck:
+      # there is a healtcheck tool, but it needs a post request, and yields _a lot_
+      # of info so we use something simpler and only check that fastmcp responds.
+      test:
+        - CMD-SHELL
+        - |
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5008/mcp)" = "405"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
   # PostgreSQL Database
   superset-postgres:

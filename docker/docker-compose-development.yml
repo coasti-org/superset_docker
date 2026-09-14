@@ -18,6 +18,11 @@ services:
     ports:
       - "8088:8088"
 
+  superset-mcp:
+    <<: *dev_overrides
+    ports:
+      - "5008:5008"
+
   superset-init:
     <<: *dev_overrides
 

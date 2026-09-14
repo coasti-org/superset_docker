@@ -8,10 +8,6 @@ Branding by and for [coasti.org](https://coasti.org/).
 
 - Docker and Docker Compose installed
 - At least 4GB RAM available
-- Optional: For Mapbox integration (to get backgrounds other than OpenStreetMap when plotting GeoJson):
-    - register on mapbox (https://www.mapbox.com/)
-    - navigate to Admin > Tokens and create a new token
-    - set `MAPBOX_API_KEY` in `./config/.env` after the product is deployed
 
 ## 🚀 Getting Started
 
