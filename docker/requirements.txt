@@ -1,0 +1,34 @@
+# Extra Python dependencies installed on top of the apache/superset base image.
+#
+# Only list packages that the base image does NOT already ship. Superset pins
+# its own dependency tree (see requirements/base.txt of the matching superset
+# release); re-declaring one of those here silently up- or downgrades it and
+# can break the image. celery, redis, itsdangerous and pillow are all pinned by
+# superset itself and are therefore deliberately absent from this file.
+#
+# Every entry is pinned and must have a manylinux wheel for cp311 on both
+# amd64 and arm64 — the runtime image has no compiler (see Dockerfile).
+#
+# To refresh: bump a pin, rebuild, and verify both `--target app` and
+# `--target worker` build for linux/amd64,linux/arm64.
+
+# --- auth: Keycloak / OIDC (see modules/KeycloakSecurityManager.py) ---
+flask-oidc==2.2.2
+Flask-OpenID==1.3.1
+
+# --- database drivers ---
+# psycopg2-binary ships a bundled libpq, so no build-essential/libpq-dev needed.
+psycopg2-binary==2.9.12
+duckdb==1.5.3
+duckdb-engine==0.17.0
+pymssql==2.3.13
+
+# --- Alerts & Reports screenshots (WEBDRIVER_TYPE = "playwright") ---
+# The worker stage runs `playwright install chromium`; the browser build it
+# fetches is tied to this pin, so bump both together.
+playwright==1.62.0
+
+# --- optional ---
+# gevent is not installed: gunicorn runs --worker-class gthread and celery runs
+# --pool=prefork, so nothing imports it. Uncomment if you switch either pool.
+# gevent==25.9.1

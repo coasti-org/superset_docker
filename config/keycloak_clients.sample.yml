@@ -2,11 +2,11 @@ host: https://keycloak.example.com
 realm: customer_1
 client_id: Superset
 client_secret: yoursecret
-# Map Keycloak roles to Superset roles (left: Superset role, right: Keycloak role)
+# Map Keycloak roles to Superset roles (left: Keycloak role, right: Superset role)
 auth_role_mappings:
-  Admin: superset_admin
-  Alpha: superset_alpha
-  Gamma: superset_gamma
+  superset_admin: Admin
+  superset_alpha: Alpha
+  superset_gamma: Gamma
 # We can also redirect users to different pages based on their roles after login
 # role_based_redirections:
 #   Admin: /

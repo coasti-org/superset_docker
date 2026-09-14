@@ -15,6 +15,11 @@ on:
         description: "Custom tag for the image (optional, defaults to version from VERSION file)"
         required: false
 
+# NOTE on base-image security patches: apache/superset release tags are built
+# once and never rebuilt, so there is no point in scheduled rebuilds against a
+# pinned tag. CVE fixes arrive as new superset patch releases — bump the
+# VERSION file (the base tag below is derived from it) and cut a release.
+
 jobs:
   docker:
     runs-on: ubuntu-latest
@@ -24,34 +29,61 @@ jobs:
 
       - name: Get version
         id: get_version
-        run: echo "version=$(cat VERSION)" >> $GITHUB_OUTPUT
+        run: |
+          version=$(cat VERSION)
+          echo "version=${version}" >> $GITHUB_OUTPUT
+          # VERSION looks like 0.2.0+superset.6.1.0 -> derive the base image tag
+          # so Dockerfile and VERSION can never drift apart.
+          echo "superset_version=${version##*+superset.}" >> $GITHUB_OUTPUT
 
-      - name: Docker meta
-        id: meta
+      # A "release" is a real version tag (not test-*).
+      # Only releases move the stable/latest tags.
+      - name: Determine release status
+        id: release
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* && "${GITHUB_REF}" != *test-* ]]; then
+            echo "is_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Docker meta (app)
+        id: meta_app
         uses: docker/metadata-action@v5
-        # generate Docker tags based on the following events/attributes
         with:
-          # list of Docker images to use as base name for tags
           images: |
             ghcr.io/${{ github.repository }}
-          # generate Docker tags based on the following events/attributes
           tags: |
             type=ref,event=tag
             type=semver,pattern={{ version }}
             type=raw,value=${{ github.event.inputs.tag || github.ref_name }}
-            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref, 'test-') }}
-            type=raw,value=latest,enable=true
+            type=raw,value=stable,enable=${{ steps.release.outputs.is_release == 'true' }}
+            type=raw,value=latest,enable=${{ steps.release.outputs.is_release == 'true' }}
             type=raw,value=${{ steps.get_version.outputs.version }}
           labels: |
             org.opencontainers.image.source=${{ github.repositoryUrl }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.get_version.outputs.version }}
 
-      - name: Debug tags
-        run: |
-          echo "Generated tags: ${{ steps.meta.outputs.tags }}"
-          echo "Generated labels: ${{ steps.meta.outputs.labels }}"
-          echo "Version: ${{ steps.get_version.outputs.version }}"
+      - name: Docker meta (worker)
+        id: meta_worker
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository }}
+          flavor: |
+            suffix=-worker,onlatest=true
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{ version }}
+            type=raw,value=${{ github.event.inputs.tag || github.ref_name }}
+            type=raw,value=stable,enable=${{ steps.release.outputs.is_release == 'true' }}
+            type=raw,value=latest,enable=${{ steps.release.outputs.is_release == 'true' }}
+            type=raw,value=${{ steps.get_version.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=${{ github.repositoryUrl }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.get_version.outputs.version }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -66,14 +98,39 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push (app)
         uses: docker/build-push-action@v6
         with:
           file: ./docker/Dockerfile
+          target: app
           platforms: linux/amd64,linux/arm64
           context: .
+          # always resolve the freshest base image digest
+          pull: true
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta_app.outputs.tags }}
+          labels: ${{ steps.meta_app.outputs.labels }}
+          build-args: |
+            SUPERSET_VERSION=${{ steps.get_version.outputs.superset_version }}
+          sbom: true
+          provenance: mode=max
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push (worker)
+        uses: docker/build-push-action@v6
+        with:
+          file: ./docker/Dockerfile
+          target: worker
+          platforms: linux/amd64,linux/arm64
+          context: .
+          pull: true
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta_worker.outputs.tags }}
+          labels: ${{ steps.meta_worker.outputs.labels }}
+          build-args: |
+            SUPERSET_VERSION=${{ steps.get_version.outputs.superset_version }}
+          sbom: true
+          provenance: mode=max
           cache-from: type=gha
           cache-to: type=gha,mode=max

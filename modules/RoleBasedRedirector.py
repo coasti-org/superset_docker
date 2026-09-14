@@ -17,16 +17,18 @@ ROLE_REDIRECT_RULES: Dict[str, str] = {}
 DEFAULT_REDIRECT_PATH = "/dashboard/list"
 
 def _load_role_based_redirections_from_keycloak_yaml() -> Dict[str, str]:
-    """Attempt to read `role_based_redirections` from the Keycloak YAML config.
+    """Read `role_based_redirections` fresh from the Keycloak YAML config.
 
     Re-uses the YAML loading logic from `KeycloakSecurityManager` by importing
     the module (it already resolves config paths and env var
-    `KEYCLOAK_CONFIG_FILE`). Returns an empty dict on any error.
+    `KEYCLOAK_CONFIG_FILE`, and caches/reloads based on file mtime so edits to
+    `keycloak_clients.yml` take effect without a container restart). Returns
+    an empty dict on any error.
     """
     try:
         import KeycloakSecurityManager as ksm  # module is on pythonpath in this repo
 
-        raw = getattr(ksm, "_yaml_settings", {}) or {}
+        raw = ksm._load_keycloak_settings() or {}
         client = raw.get("client", raw)
         rb = client.get("role_based_redirections") or {}
         if isinstance(rb, dict):
@@ -72,6 +74,10 @@ def _role_based_redirect(source: str) -> FlaskResponse:
     user_roles = security_mgr.get_user_roles()
     username = getattr(getattr(g, "user", None), "username", "unknown")
 
+    # Reload redirect rules fresh on every request so edits to
+    # `keycloak_clients.yml` take effect without a container restart.
+    redirect_rules = _load_role_based_redirections_from_keycloak_yaml() or ROLE_REDIRECT_RULES
+
     logging.warning(
         "Role redirect: evaluating username=%s with security manager %s; roles=%s",
         username,
@@ -83,7 +89,7 @@ def _role_based_redirect(source: str) -> FlaskResponse:
         role_name = role.name
         logging.warning("Role redirect: inspecting role %s -- %s", role_name, role)
 
-        target_path = ROLE_REDIRECT_RULES.get(role_name)
+        target_path = redirect_rules.get(role_name)
         if target_path:
             logging.warning(
                 "Role redirect: role %s matched; redirecting username=%s to %s",

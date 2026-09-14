@@ -1,72 +1,58 @@
-FROM apache/superset:6.1.0
+# syntax=docker/dockerfile:1.7
+# Multi-target build:
+#   - base:   shared layers (OS deps, python deps, entrypoints, translations)
+#   - app:    web server / init / beat image (NO browser, several 100 MB smaller)
+#   - worker: app + Playwright/Chromium for Alerts & Reports screenshots
+#
+# Build examples:
+#   docker build --target app    -t superset_docker:app    -f docker/Dockerfile .
+#   docker build --target worker -t superset_docker:worker -f docker/Dockerfile .
+#
 # see https://superset.apache.org/docs/installation/docker-builds/#building-your-own-production-docker-image
+
+# Keep in sync with VERSION (CI derives this from the part after "+superset.").
+ARG SUPERSET_VERSION=6.1.0
+# Translations are versioned per superset minor; bump together with SUPERSET_VERSION.
+ARG TRANSLATIONS_DIR=6.0.0
+
+# ---------------------------------------------------------------------------- #
+#                                     base                                     #
+# ---------------------------------------------------------------------------- #
+FROM apache/superset:${SUPERSET_VERSION} AS base
+ARG TRANSLATIONS_DIR
+
 # Switching to root to install the required packages
 USER root
 
+# NOTE: build-essential/libpq-dev were dropped: psycopg2-binary ships a bundled
+# libpq, so nothing here needs a compiler. If you ever add a source-built
+# driver, compile it in a separate builder stage and COPY the wheel in,
+# instead of shipping the toolchain in the runtime image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
     curl \
-    # needed for postgres
-    build-essential \
-    libpq-dev \
+    # needed for db wait / debugging (pg_isready, psql)
     postgresql-client \
-    # needed for redis
+    # needed for redis wait / debugging
     redis-tools \
     # when used with custom cas:
     ca-certificates \
     # unzip utility
     unzip \
     zip \
-    libaio1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Create necessary directories for Keycloak auth
-RUN mkdir -p /app/superset/auth_keycloak
-RUN chown superset:superset /app/superset/auth_keycloak
-
-# Playwright caching
-RUN mkdir -p /app/superset_home/.cache/dconf
-RUN chown superset:superset /app/superset_home/.cache/dconf
+RUN install -d -o superset -g superset /app/superset/auth_keycloak
 
 # Install additional Python packages into the Superset virtualenv.
-# The venv does not include pip, so use uv and target /app/.venv/bin/python.
-RUN . /app/.venv/bin/activate && \
-    uv pip install \
-    gevent \
-    redis \
-    celery \
-    # screenshots packages (Alerts & Reports to generate PDFs of dashboards)
-    pillow==10.3.0 \
-    # auth packages
-    flask-oidc==2.2.2 \
-    Flask-OpenID==1.3.1 \
-    itsdangerous==2.2.0 \
-    # db specific drivers
-    psycopg2 \
-    psycopg2-binary==2.9.12 \
-    duckdb-engine==0.17.0 \
-    duckdb==1.5.3 \
-    pymssql==2.3.13
-
-ENV PLAYWRIGHT_BROWSERS_PATH=/usr/local/share/playwright-browsers
-
-RUN --mount=type=cache,target=/app/superset_home/.cache/uv \
-        uv pip install playwright && \
-        playwright install-deps && \
-        playwright install chromium
-
-# Give extra groups to the superset user if needed
-# TODO: we need this at runtime, so invoke entrypoint as root, and use gosu.
-# see lf python dbt stack
-ARG EXTRA_GIDS
-RUN if [ -n "$EXTRA_GIDS" ]; then \
-    for group in $EXTRA_GIDS; do \
-        if ! getent group $group > /dev/null 2>&1; then \
-            groupadd -g $group superset_group_$group; \
-        fi; \
-        usermod -a -G $group superset; \
-    done; \
-    fi
+# The venv does not include pip, so use uv.
+# All versions are pinned in requirements.txt (regenerate via `uv pip compile`).
+# COPY-ing the file first means this layer is only rebuilt when deps change.
+COPY ./docker/requirements.txt /tmp/requirements.txt
+ENV UV_CACHE_DIR=/root/.cache/uv
+RUN --mount=type=cache,target=/root/.cache/uv \
+    . /app/.venv/bin/activate && \
+    uv pip install -r /tmp/requirements.txt
 
 # Fix: superset/views/base.py->get_default_spinner_svg() loads this from the
 # frontend source tree, but the production Docker image strips the source after
@@ -82,16 +68,11 @@ USER superset
 RUN mkdir -p /app/superset_home/logs /app/superset_home/celery
 
 # Copy entrypoint scripts
-COPY --chown=superset:superset ./docker/entrypoint/*.sh /app/superset/entrypoint/
+COPY --chown=superset:superset --chmod=755 ./docker/entrypoint/*.sh /app/superset/entrypoint/
 
 # Copy pre-build translations (the . at the end of the source is needed to merge)
 # see https://github.com/apache/superset/issues/35959#issuecomment-3481035646
-COPY --chown=superset:superset ./translations/6.0.0/. /app/superset/translations/
-
-# Prep scripts, just for convenience
-# Normalize line endings (Windows CRLF -> Unix LF) so shebangs work in Linux containers
-RUN sed -i 's/\r$//' /app/superset/entrypoint/*.sh
-RUN chmod +x /app/superset/entrypoint/*.sh
+COPY --chown=superset:superset ./translations/${TRANSLATIONS_DIR}/. /app/superset/translations/
 
 # Copy custom modules into pythonpath so they're auto-discovered
 COPY --chown=superset:superset ./modules/*.py /app/pythonpath/
@@ -100,5 +81,37 @@ COPY --chown=superset:superset ./modules/*.py /app/pythonpath/
 ENV PYTHONPATH="/app/pythonpath:$PYTHONPATH"
 ENV SUPERSET_CONFIG_PATH="/app/superset/superset_config.py"
 
+# NOTE: the former EXTRA_GIDS build-arg was removed. Baking host-specific GIDs
+# into a published image ties it to one machine; use runtime `group_add:` in
+# docker-compose instead (see docker-compose-sample.yml).
+
+# ---------------------------------------------------------------------------- #
+#                          app (web server, init, beat)                        #
+# ---------------------------------------------------------------------------- #
+FROM base AS app
+
 # Default command (can be overridden in docker-compose)
 CMD ["/app/superset/entrypoint/start_superset.sh"]
+
+# ---------------------------------------------------------------------------- #
+#                    worker (adds Playwright + Chromium)                       #
+# ---------------------------------------------------------------------------- #
+FROM base AS worker
+
+USER root
+
+# Playwright caching
+RUN install -d -o superset -g superset /app/superset_home/.cache/dconf
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/usr/local/share/playwright-browsers
+
+# playwright itself is already installed (pinned) via requirements.txt in base;
+# here we only pull in the browser + its system deps.
+RUN . /app/.venv/bin/activate && \
+    playwright install-deps chromium && \
+    playwright install chromium && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+USER superset
+
+CMD ["/app/superset/entrypoint/start_celery_worker.sh"]

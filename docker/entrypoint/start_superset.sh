@@ -1,43 +1,67 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 echo "=============================================="
 echo "Starting Apache Superset Web Server"
 echo "=============================================="
 
 export FLASK_APP=superset
+# keep the redis password off the redis-cli command line (visible via `ps` otherwise)
+export REDISCLI_AUTH="${REDIS_PASSWORD:-}"
 
-# Wait for database to be ready
-echo "Waiting for database to be ready..."
-while ! pg_isready -h "${POSTGRES_HOST:-postgres}" -p "${POSTGRES_PORT:-5432}" -U "${POSTGRES_USER:-superset}" -d "${POSTGRES_DB:-superset}" > /dev/null 2>&1; do
-    echo "Database not ready, waiting 5 seconds..."
-    sleep 5
-done
-echo "Database is ready!"
+# Bounded wait for dependencies. compose `depends_on: service_healthy` covers
+# first start; this loop additionally covers container *restarts* (where
+# depends_on conditions are not re-evaluated).
+MAX_WAIT_ATTEMPTS="${MAX_WAIT_ATTEMPTS:-36}" # 36 * 5s = 3 minutes
 
-# Wait for Redis to be ready
-echo "Waiting for Redis to be ready..."
-while ! redis-cli -h "${REDIS_HOST:-redis}" -p "${REDIS_PORT:-6379}" -a "${REDIS_PASSWORD}" ping > /dev/null 2>&1; do
-    echo "Redis not ready, waiting 5 seconds..."
-    sleep 5
-done
-echo "Redis is ready!"
+wait_for() {
+    local name="$1"; shift
+    local attempt=0
+    echo "Waiting for ${name} to be ready..."
+    until "$@" > /dev/null 2>&1; do
+        attempt=$((attempt + 1))
+        if [ "${attempt}" -ge "${MAX_WAIT_ATTEMPTS}" ]; then
+            echo "ERROR: ${name} not ready after ${attempt} attempts, giving up." >&2
+            exit 1
+        fi
+        echo "${name} not ready, waiting 5 seconds..."
+        sleep 5
+    done
+    echo "${name} is ready!"
+}
 
-# Create log directory
-LOG_DIR="/app/superset_home/logs"
-mkdir -p "${LOG_DIR}"
+wait_for "database" pg_isready \
+    -h "${POSTGRES_HOST:-superset-postgres}" -p "${POSTGRES_PORT:-5432}" \
+    -U "${POSTGRES_USER:-superset}" -d "${POSTGRES_DB:-superset}"
+wait_for "redis" redis-cli -h "${REDIS_HOST:-superset-redis}" -p "${REDIS_PORT:-6379}" ping
 
 echo "Starting Superset Web Server..."
+# Logs go to stdout/stderr so `docker logs` works and the logging driver
+# handles rotation (file logs in a bind mount grow unbounded).
+# Worker/thread counts come from the env (SERVER_WORKER_AMOUNT /
+# SERVER_THREADS_AMOUNT) — previously documented but silently ignored.
+# GUNICORN_TIMEOUT defaults to 180 to match SUPERSET_WEBSERVER_TIMEOUT in
+# superset_config.py (it was 120, killing long queries 60s early).
+# GUNICORN_KEEPALIVE must stay ABOVE Caddy's upstream idle timeout
+# (config/caddy/Caddyfile.*: keep_alive idle_timeout 60s) so Caddy is always
+# the side that closes a pooled connection. The old value of 2s let gunicorn
+# close conns Caddy still considered usable; the resulting race surfaces as
+# sporadic 502s on non-retryable requests (POST /api/v1/chart/data, SQL Lab).
+# Idle keep-alive conns are parked on gthread's poller and hold no thread.
 exec gunicorn \
     --bind "0.0.0.0:8088" \
-    --access-logfile "${LOG_DIR}/gunicorn_access.log" \
-    --error-logfile "${LOG_DIR}/gunicorn_error.log" \
+    --access-logfile - \
+    --error-logfile - \
     --worker-class gthread \
-    --workers 4 \
-    --timeout 120 \
-    --keep-alive 2 \
+    --workers "${SERVER_WORKER_AMOUNT:-4}" \
+    --threads "${SERVER_THREADS_AMOUNT:-20}" \
+    --timeout "${GUNICORN_TIMEOUT:-180}" \
+    --keep-alive "${GUNICORN_KEEPALIVE:-75}" \
     --max-requests 1000 \
     --max-requests-jitter 100 \
-    --limit-request-line 0 \
-    --limit-request-field_size 0 \
+    --limit-request-line 8190 \
+    --limit-request-field_size 16380 \
     "superset.app:create_app()"
+# NOTE: the former `--limit-request-line 0 --limit-request-field_size 0`
+# (unlimited) was replaced by generous finite limits. If a legitimate long URL
+# ever hits these, raise the number — don't disable the limit.

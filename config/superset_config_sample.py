@@ -41,13 +41,21 @@ FEATURE_FLAGS = {
 ENABLE_PROXY_FIX = True
 
 ENABLE_TIME_ROTATE = True # rotating logs
-TIME_ROTATE_LOG_LEVEL = logging.DEBUG
 
-logging.getLogger("superset.stats_logger").setLevel(logging.DEBUG)
-logging.getLogger("celery").setLevel(logging.DEBUG)
-logging.getLogger("superset.tasks").setLevel(logging.DEBUG)
+# Log level is env-driven (set LOG_LEVEL=DEBUG in .env when debugging);
+# a production sample should not default to DEBUG.
+_LOG_LEVEL = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
+TIME_ROTATE_LOG_LEVEL = _LOG_LEVEL
+
+logging.getLogger("superset.stats_logger").setLevel(_LOG_LEVEL)
+logging.getLogger("celery").setLevel(_LOG_LEVEL)
+logging.getLogger("superset.tasks").setLevel(_LOG_LEVEL)
 
 # to get sqlite working:
+# SECURITY WARNING: this disables a real guard, not just an inconvenience.
+# It allows file-based DB URIs (sqlite, duckdb paths, ...), which lets any user
+# with database-creation rights read/write files inside the container.
+# Only keep this False if you trust everyone who can add databases.
 PREVENT_UNSAFE_DB_CONNECTIONS=False
 
 # hostname is docker compose service name.
@@ -79,16 +87,28 @@ D3_FORMAT = {
 }
 
 # ------------------------------ Redis, Caching ------------------------------ #
-REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
+# Single Redis instance shared by caches and the celery broker.
+# The instance MUST run maxmemory-policy volatile-lru (see docker-compose):
+# caches set TTLs and stay evictable, celery's queue keys have no TTL and are
+# therefore never evicted. Never use allkeys-lru here — eviction is
+# instance-wide (not per-DB) and can silently drop queued reports/alerts.
+REDIS_HOST = os.environ.get("REDIS_HOST", "superset-redis")
 REDIS_PORT = os.environ.get("REDIS_PORT", "6379")
 REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
+
+REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
+
+# DB assignment (unique per consumer, so a targeted FLUSHDB never hits others):
+#   0 celery broker, 1 thumbnails, 2 table names, 3 data, 4 metadata,
+#   5 filter state, 6 explore form data, 8 SQL Lab results,
+#   9 distributed coordination, 10 celery result backend
 from cachelib.redis import RedisCache
 # 1. Thumbnails cache
 THUMBNAIL_CACHE_CONFIG = {
     'CACHE_TYPE': 'RedisCache',
     'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24,  # 1 day
     'CACHE_KEY_PREFIX': 'thumbnail',
-    'CACHE_REDIS_URL': f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/1',
+    'CACHE_REDIS_URL': f'{REDIS_URL}/1',
 }
 
 # 2. Table names cache
@@ -96,7 +116,7 @@ TABLE_NAMES_CACHE_CONFIG = {
     'CACHE_TYPE': 'RedisCache',
     'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24,  # 1 day
     'CACHE_KEY_PREFIX': 'table_names',
-    'CACHE_REDIS_URL': f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/2',
+    'CACHE_REDIS_URL': f'{REDIS_URL}/2',
 }
 
 # 3. Data cache
@@ -104,7 +124,7 @@ DATA_CACHE_CONFIG = {
     'CACHE_TYPE': 'RedisCache',
     'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24,  # 1 day
     'CACHE_KEY_PREFIX': 'data',
-    'CACHE_REDIS_URL': f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/3',
+    'CACHE_REDIS_URL': f'{REDIS_URL}/3',
 }
 
 # 4. Metadata cache
@@ -112,7 +132,7 @@ CACHE_CONFIG = {
     'CACHE_TYPE': 'RedisCache',
     'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24,  # 1 day
     'CACHE_KEY_PREFIX': 'metadata',
-    'CACHE_REDIS_URL': f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/4',
+    'CACHE_REDIS_URL': f'{REDIS_URL}/4',
 }
 
 # 5. Filter state cache
@@ -120,7 +140,7 @@ FILTER_STATE_CACHE_CONFIG = {
     'CACHE_TYPE': 'RedisCache',
     'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24,  # 1 day
     'CACHE_KEY_PREFIX': 'filter_state',
-    'CACHE_REDIS_URL': f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/5',
+    'CACHE_REDIS_URL': f'{REDIS_URL}/5',
 }
 
 # 6. Explore chart form data cache
@@ -128,7 +148,7 @@ EXPLORE_FORM_DATA_CACHE_CONFIG = {
     'CACHE_TYPE': 'RedisCache',
     'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24,  # 1 day
     'CACHE_KEY_PREFIX': 'form_data',
-    'CACHE_REDIS_URL': f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0',
+    'CACHE_REDIS_URL': f'{REDIS_URL}/6',
 }
 
 # New in Superset 6.1: Distributed coordination backend for pub/sub messaging and
@@ -137,20 +157,24 @@ EXPLORE_FORM_DATA_CACHE_CONFIG = {
 DISTRIBUTED_COORDINATION_CONFIG = {
     "CACHE_TYPE": "RedisCache",
     "CACHE_KEY_PREFIX": "signal_",
-    "CACHE_REDIS_URL": f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/1",
+    # own DB (shared with the thumbnail cache)
+    "CACHE_REDIS_URL": f"{REDIS_URL}/9",
     "CACHE_DEFAULT_TIMEOUT": 300,
 }
 
 # ------------------------- Report Setup, needs Redis ------------------------ #
 
 class CeleryConfig:
-    broker_url = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
+    broker_url = f"{REDIS_URL}/0"
     imports = (
         "superset.sql_lab",
         "superset.tasks.scheduler",
     )
-    result_backend = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
-    worker_prefetch_multiplier = 10
+    result_backend = f"{REDIS_URL}/10"  # was db 0, shared with the broker
+    # prefetch=1: report/screenshot tasks are long-running; a high prefetch
+    # makes one busy worker hoard tasks while others idle, and
+    # combined with task_acks_late redelivers big batches on a crash.
+    worker_prefetch_multiplier = 1
     task_acks_late = True
     task_annotations = {
         "sql_lab.get_sql_results": {
@@ -211,7 +235,7 @@ WEBDRIVER_BASEURL_USER_FRIENDLY = os.environ.get("DOMAIN", "http://localhost:808
 # Screenshot configuration
 SCREENSHOT_LOCATE_WAIT = 100
 SCREENSHOT_LOAD_WAIT = 600
-SUPERSET_WEBSERVER_TIMEOUT = 180
+SUPERSET_WEBSERVER_TIMEOUT = 180  # keep <= GUNICORN_TIMEOUT (start_superset.sh)
 # ------------------------- End ALERTS & REPORTS Setup ------------------------ #
 
 # ------------------------ Keycloak Integration ------------------------ #

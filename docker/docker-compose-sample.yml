@@ -5,7 +5,19 @@ name: superset
 
 # define snippets we reuse in various places as yaml anchors
 x-templates:
-  image: &superset_image ghcr.io/coasti-org/superset_docker:0.1.4-superset.6.1.0
+  # Two image flavors from the same Dockerfile:
+  #   app    -> web server, init, beat (no browser)
+  #   worker -> app + Playwright/Chromium for report screenshots
+  app_image: &superset_app_image ghcr.io/coasti-org/superset_docker:0.2.0-superset.6.1.0
+  worker_image: &superset_worker_image ghcr.io/coasti-org/superset_docker:0.2.0-superset.6.1.0-worker
+
+  # Log to stdout/stderr and let Docker rotate. Without this, json-file logs
+  # grow unbounded on the host.
+  logging: &default_logging
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
 
   # -------------------------------- Volumes ------------------------------- #
 
@@ -20,7 +32,7 @@ x-templates:
     # persistent storage for sample databases, user uploads etc.
 
     - superset_keycloak_data:/app/superset/auth_keycloak
-    # also when not hosting your own keycloak, used in our example supser_config.py
+    # also when not hosting your own keycloak, used in our example superset_config.py
 
   caddy_volumes: &caddy_volumes
     - ../config/caddy/Caddyfile.acme:/etc/caddy/Caddyfile.acme:ro
@@ -34,14 +46,14 @@ x-templates:
     - ./entrypoint/init_postgres.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
     - postgres_data:/var/lib/postgresql/data
 
-  redis_volumes: &redis_volumes
-    - redis_data:/data
-
   # ------------------------------- env vars ------------------------------- #
 
   # we want each container to only have those env vars that it needs.
   # therefore, you need to specify your .env, which may contain all vars, via --env-file
   # in your compose command. see here: https://stackoverflow.com/a/72368718
+  #
+  # Secrets use the ${VAR:?message} form: compose fails fast instead of
+  # silently falling back to rather insecure defaults (e.g. admin/admin).
   caddy_vars: &caddy_vars
     DOMAIN_NAME: ${DOMAIN_NAME}
     DOMAIN: ${DOMAIN}
@@ -51,27 +63,30 @@ x-templates:
     TLS_KEY_FILE: ${TLS_KEY_FILE:-/etc/caddy/certs/privkey.pem}
 
   pg_vars: &pg_vars
-    POSTGRES_HOST: ${POSTGRES_HOST:-postgres}
+    POSTGRES_HOST: ${POSTGRES_HOST:-superset-postgres}
     POSTGRES_PORT: 5432
     POSTGRES_DB: ${POSTGRES_DB:-superset}
     POSTGRES_USER: ${POSTGRES_USER:-superset}
-    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
 
   redis_vars: &redis_vars
-    REDIS_HOST: ${REDIS_HOST:-redis}
+    REDIS_HOST: ${REDIS_HOST:-superset-redis}
     REDIS_PORT: 6379
-    REDIS_PASSWORD: ${REDIS_PASSWORD}
+    REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
 
   superset_vars: &superset_vars
-    SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+    SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?SUPERSET_SECRET_KEY must be set in .env}
     SUPERSET_ADMIN: ${SUPERSET_ADMIN:-admin}
-    SUPERSET_PASSWORD: ${SUPERSET_PASSWORD:-admin}
+    SUPERSET_PASSWORD: ${SUPERSET_PASSWORD:?SUPERSET_PASSWORD must be set in .env}
     SUPERSET_ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL:-admin@superset.local}
     SUPERSET_LOAD_EXAMPLES: ${SUPERSET_LOAD_EXAMPLES:-no}
 
     FLASK_ENV: ${FLASK_ENV:-production}
-    SERVER_WORKER_AMOUNT: ${SERVER_WORKER_AMOUNT}
-    SERVER_THREADS_AMOUNT: ${SERVER_THREADS_AMOUNT}
+    SERVER_WORKER_AMOUNT: ${SERVER_WORKER_AMOUNT:-4}
+    SERVER_THREADS_AMOUNT: ${SERVER_THREADS_AMOUNT:-20}
+    GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-180}
+    GUNICORN_KEEPALIVE: ${GUNICORN_KEEPALIVE:-75}
+    CELERY_WORKER_CONCURRENCY: ${CELERY_WORKER_CONCURRENCY:-4}
 
     MAPBOX_API_KEY: ${MAPBOX_API_KEY}
 
@@ -86,19 +101,25 @@ x-templates:
     DOMAIN: ${DOMAIN}
     AUTH_TYPE: ${AUTH_TYPE:-AUTH_DB}
     USE_ROLE_BASED_REDIRECTS: ${USE_ROLE_BASED_REDIRECTS}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
     REQUESTS_CA_BUNDLE: ${REQUESTS_CA_BUNDLE:-} # its okay if not set.
     SSL_CERT_FILE: ${SSL_CERT_FILE:-}
     <<: [*pg_vars, *redis_vars]
 
 
 # ------------------------------- Containers ------------------------------- #
+# NOTE: no `container_name:` anywhere. The project name (`name: superset`)
+# already yields predictable names (superset-app-1, ...), and fixed names
+# would break `--scale superset-worker=N` and multiple stacks per host.
+# Service names (superset-app, ...) remain the DNS names on the networks.
 
 services:
 
   superset-caddy:
-    image: caddy:2
-    container_name: superset-caddy
+    # pin at least the minor version so a routine `pull` can't surprise us
+    image: caddy:2.10
     restart: unless-stopped
+    logging: *default_logging
     environment:
         <<: *caddy_vars
     ports:
@@ -110,6 +131,7 @@ services:
           - ${DOMAIN_NAME}
     volumes: *caddy_volumes
     command: /etc/caddy/start_caddy.sh
+    mem_limit: ${CADDY_MEM_LIMIT:-256m}
     healthcheck:
       test: ["CMD", "nc", "-z", "localhost:80"] # no curl or wget available in container
       interval: 30s
@@ -119,28 +141,41 @@ services:
 
   # Superset Web Server
   superset-app:
-    image: *superset_image
-    container_name: superset-app
+    image: *superset_app_image
     restart: unless-stopped
+    logging: *default_logging
     environment:
         <<: *superset_vars
     command: ["/app/superset/entrypoint/start_superset.sh"]
-    # Intentionally NOT exposing Superset directly; access it via Caddy.
-    ports:
-      - "8088:8088"
+    # Superset is intentionally NOT published to the host; all access goes
+    # through Caddy (TLS, and the ${DOMAIN_NAME} alias for OAuth redirects).
+    # For local debugging only, you may bind to loopback:
+    # ports:
+    #   - "127.0.0.1:8088:8088"
     networks:
       - default
       - proxy
+    # If the superset user needs extra host groups (e.g. to read a mounted
+    # docker.sock or device), grant them at runtime instead of baking GIDs
+    # into the image:
+    # group_add:
+    #   - "998"
     depends_on:
-      superset-caddy:
-        condition: service_healthy
+      # NOTE: no dependency on caddy — the proxy retries upstreams by itself,
+      # and the app should not be gated on it.
       superset-postgres:
         condition: service_healthy
       superset-redis:
         condition: service_healthy
       superset-init:
         condition: service_completed_successfully
-    shm_size: "2gb" # shared memory size for better performance, especially with Playwright screenshots
+    # Size together with gunicorn: budget ~400-500m per SERVER_WORKER_AMOUNT
+    # process (threads share the process, they're cheap). Default assumes 2 workers.
+    # IMPORTANT for in-process engines (duckdb!): queries execute INSIDE this
+    # container, so add (duckdb memory_limit x concurrent queries) on top —
+    # and always set an explicit memory_limit in the connection's engine
+    # parameters, duckdb otherwise sizes itself to HOST RAM, not this limit.
+    mem_limit: ${SUPERSET_APP_MEM_LIMIT:-1g}
     volumes: *superset_volumes
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
@@ -152,52 +187,65 @@ services:
 
   # PostgreSQL Database
   superset-postgres:
-    image: postgres:17
-    container_name: superset-postgres
+    image: postgres:17.5
     restart: unless-stopped
+    logging: *default_logging
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-superset}
-      POSTGRES_USER: ${POSTGRES_USER:-superset}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      <<: *pg_vars
       POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
     volumes: *pg_volumes
-    # Intentionally NOT exposing Superset directly for security reasons.
+    # metadata DB only (analytics data lives in your own sources); default
+    # shared_buffers (128MB) fits comfortably here
+    mem_limit: ${POSTGRES_MEM_LIMIT:-512m}
+    # Intentionally NOT exposed to the host for security reasons.
     # ports:
-    #   - "${POSTGRES_PORT:-5432}:5432"
+    #   - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-superset} -d ${POSTGRES_DB:-superset}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Redis Cache & Message Broker
+  # Redis: single instance for caches AND the celery broker.
+  # CRITICAL: the policy must be volatile-lru (NOT allkeys-lru): it only evicts
+  # keys with a TTL. All superset caches set TTLs, celery's broker/queue keys
+  # don't — so under memory pressure caches are evicted while queued
+  # reports/alerts are untouchable. With allkeys-lru, cold queued tasks can be
+  # silently dropped. If unevictable keys ever fill maxmemory, writes fail
+  # loudly (the good failure mode) — raise maxmemory in that case.
+  # AOF persistence stays on for the broker's sake.
   superset-redis:
-    image: redis:7
-    container_name: superset-redis
+    image: redis:7.4
     restart: unless-stopped
+    logging: *default_logging
     environment:
-        <<: *redis_vars
+      # keeps the password off the healthcheck command line / `ps` output
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
     command: >
       redis-server
       --requirepass ${REDIS_PASSWORD}
-      --maxmemory 6gb
-      --maxmemory-policy allkeys-lru
+      --maxmemory ${REDIS_MAXMEMORY:-1gb}
+      --maxmemory-policy volatile-lru
       --save 60 1000
       --appendonly yes
-    volumes: *redis_volumes
-    # Intentionally NOT exposing Superset directly for security reasons.
-    # ports:
-    #   - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    # maxmemory is a cap, not a reservation — an idle instance uses a few MB.
+    # Size it generously: the data cache holds actual chart/query result
+    # payloads, and evictions turn into re-queries against your source DBs.
+    # rule of thumb: mem_limit >= maxmemory * 1.5, plus headroom for the
+    # AOF-rewrite fork (copy-on-write)
+    mem_limit: ${REDIS_MEM_LIMIT:-2g}
     healthcheck:
-      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   # Superset Database Initialization (Run once)
   superset-init:
-    image: *superset_image
-    container_name: superset-init
+    image: *superset_app_image
+    logging: *default_logging
     environment:
         <<: *superset_vars
     command: ["/app/superset/entrypoint/init_db.sh"]
@@ -206,27 +254,35 @@ services:
         condition: service_healthy
       superset-redis:
         condition: service_healthy
+    # transient; only counts against RAM during startup. Raise this if you run
+    # with SUPERSET_LOAD_EXAMPLES=yes (the example loader is the memory-hungry path).
+    mem_limit: ${SUPERSET_INIT_MEM_LIMIT:-1g}
     volumes: *superset_volumes
     restart: "no"
 
   # Celery Worker for async tasks
   superset-worker:
-    image: *superset_image
-    container_name: superset-worker
+    image: *superset_worker_image
     restart: unless-stopped
+    logging: *default_logging
     environment:
         <<: *superset_vars
     command: ["/app/superset/entrypoint/start_celery_worker.sh"]
     depends_on:
+      # NOTE: no dependency on superset-app. The worker only needs DB, broker
+      # and a migrated schema to start; screenshot tasks that target the app
+      # simply retry/fail per-task if it happens to be down.
       superset-postgres:
         condition: service_healthy
       superset-redis:
         condition: service_healthy
       superset-init:
         condition: service_completed_successfully
-      superset-app:
-        condition: service_healthy
-    shm_size: "2gb"
+    shm_size: ${SUPERSET_WORKER_SHM_SIZE:-1gb} # shared memory for Playwright/Chromium screenshots
+    # Size together with celery: ~300-400m per CELERY_WORKER_CONCURRENCY prefork
+    # process, plus ~500m headroom for a Chromium instance during screenshots.
+    # Default assumes concurrency=2.
+    mem_limit: ${SUPERSET_WORKER_MEM_LIMIT:-1536m}
     volumes: *superset_volumes
     healthcheck:
       test: ["CMD", "celery", "--app=superset.tasks.celery_app:app", "inspect", "ping"]
@@ -237,9 +293,9 @@ services:
 
   # Celery Beat Scheduler for scheduled tasks
   superset-beat:
-    image: *superset_image
-    container_name: superset-beat
+    image: *superset_app_image
     restart: unless-stopped
+    logging: *default_logging
     environment:
         <<: *superset_vars
     command: ["/app/superset/entrypoint/start_celery_beat.sh"]
@@ -250,9 +306,15 @@ services:
         condition: service_healthy
       superset-init:
         condition: service_completed_successfully
-      superset-app:
-        condition: service_healthy
+    mem_limit: ${SUPERSET_BEAT_MEM_LIMIT:-256m}
     volumes: *superset_volumes
+    healthcheck:
+      # beat has no ping command; verify the scheduler process is alive
+      test: ["CMD-SHELL", "test -f /app/superset_home/celery/celerybeat.pid && kill -0 $$(cat /app/superset_home/celery/celerybeat.pid)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
 networks:
   proxy:

@@ -4,12 +4,12 @@ from pathlib import Path
 
 import jwt
 import yaml
-from flask import g
+from flask import current_app, g
 
 logger = logging.getLogger(__name__)
 
 
-def _load_keycloak_settings() -> dict:
+def _keycloak_config_candidates():
     env_path = os.environ.get("KEYCLOAK_CONFIG_FILE")
     candidates = []
     if env_path:
@@ -20,20 +20,34 @@ def _load_keycloak_settings() -> dict:
             Path("/app/superset/auth_keycloak/keycloak_clients.yml"),
         ]
     )
+    return candidates
 
-    data = {}
+
+# Cache of the last-loaded YAML settings, keyed by (path, mtime) so that
+# per-request callers (oauth_user_info, role-based redirects) can pick up
+# edits to keycloak_clients.yml without requiring a container restart.
+# Note: connection-level settings (host/realm/client_id/client_secret) are
+# still only read once below, since they configure the OAuth client at
+# app startup and can't be swapped live without re-registering it.
+_yaml_cache = {"path": None, "mtime": None, "data": {}}
+
+
+def _load_keycloak_settings() -> dict:
+    candidates = _keycloak_config_candidates()
     for config_path in candidates:
         if config_path.is_file():
+            mtime = config_path.stat().st_mtime
+            if _yaml_cache["path"] == config_path and _yaml_cache["mtime"] == mtime:
+                return _yaml_cache["data"]
             logger.debug("Loading Keycloak YAML settings from %s", config_path)
             with config_path.open(encoding="utf-8") as handle:
                 data = yaml.safe_load(handle) or {}
-            break
-    else:
-        logger.debug("Keycloak YAML settings not found in candidates %s; using defaults", candidates)
-    # Accept either top-level keys or a nested "client" mapping
-    client_data = data.get("client", data)
-    logger.debug("Keycloak YAML settings resolved to: %s", client_data)
-    return client_data
+            client_data = data.get("client", data)
+            _yaml_cache.update(path=config_path, mtime=mtime, data=client_data)
+            logger.debug("Keycloak YAML settings resolved to: %s", client_data)
+            return client_data
+    logger.debug("Keycloak YAML settings not found in candidates %s; using defaults", candidates)
+    return {}
 
 
 _yaml_settings = _load_keycloak_settings()
@@ -84,24 +98,32 @@ OAUTH_PROVIDERS = [
 ]
 
 
-def _build_auth_roles_mapping():
-    """Build a mapping of Superset role -> list of Keycloak roles from YAML.
+def _build_auth_roles_mapping(settings: dict | None = None):
+    """Build the Keycloak role -> Superset role(s) mapping from YAML.
 
-    The YAML file may define `auth_role_mappings` as KeycloakRole: SupersetRole
-    or KeycloakRole: [SupersetRoleA, SupersetRoleB]. This function inverts
-    that mapping into the shape expected by Superset: {sup_role: [kc_roles...]}
+    The YAML file defines `auth_role_mappings` as KeycloakRole: SupersetRole
+    or KeycloakRole: [SupersetRoleA, SupersetRoleB]. This is returned as-is
+    in the shape {kc_role: [sup_roles...]}, which is exactly what
+    Flask-AppBuilder's AUTH_ROLES_MAPPING / get_roles_from_keys expects
+    (key = external/provider role key, value = local Superset role names).
+
+    :param settings: pre-loaded YAML settings dict; defaults to a fresh
+        `_load_keycloak_settings()` call so callers get up-to-date mappings
+        even if `keycloak_clients.yml` changed after the app started.
     """
-    raw = _yaml_settings.get("auth_role_mappings") or {}
+    if settings is None:
+        settings = _load_keycloak_settings()
+    raw = settings.get("auth_role_mappings") or {}
     mapping = {}
     for kc_role, sup_value in raw.items():
+        if not kc_role:
+            continue
         if isinstance(sup_value, (list, tuple)):
-            sup_roles = sup_value
+            sup_roles = [sup for sup in sup_value if sup]
         else:
-            sup_roles = [sup_value]
-        for sup in sup_roles:
-            if not sup:
-                continue
-            mapping.setdefault(sup, []).append(kc_role)
+            sup_roles = [sup_value] if sup_value else []
+        if sup_roles:
+            mapping[kc_role] = sup_roles
     logger.debug("AUTH_ROLES_MAPPING resolved to: %s", mapping)
     return mapping
 
@@ -117,24 +139,31 @@ class KeycloakSecurityManager(SupersetSecurityManager):
         me = self.appbuilder.sm.oauth_remotes[provider].get("openid-connect/userinfo")
         me.raise_for_status()
         data = me.json()
-        logger.debug("User info from Keycloak: %s", data)
-        logger.debug("User info realm roles: %s", data.get("realm_access", {}).get("roles", []))
+        username = data.get("preferred_username", "")
+        logger.debug("[user=%s] User info from Keycloak: %s", username, data)
 
         access_token = response.get("access_token")
         decoded_token = jwt.decode(access_token, options={"verify_signature": False})
         roles = decoded_token.get("realm_access", {}).get("roles", [])
-        logger.debug("Realm roles extracted from JWT: %s", roles)
+        logger.debug("[user=%s] Realm roles extracted from JWT: %s", username, roles)
 
-        # Map Keycloak realm roles to Superset role keys using AUTH_ROLES_MAPPING.
-        mapped = set()
-        for sup_role, kc_roles in AUTH_ROLES_MAPPING.items():
-            if any(r in roles for r in kc_roles):
-                mapped.add(sup_role)
+        # Refresh AUTH_ROLES_MAPPING from keycloak_clients.yml on every login,
+        # so role mapping edits take effect immediately without a container
+        # restart. Flask-AppBuilder reads current_app.config["AUTH_ROLES_MAPPING"]
+        # fresh on each request (see auth_roles_mapping property), so updating
+        # it here is picked up by the role-sync step that runs right after
+        # oauth_user_info returns.
+        current_app.config["AUTH_ROLES_MAPPING"] = _build_auth_roles_mapping()
 
-        role_keys = list(mapped) if mapped else roles
+        # Return the raw Keycloak realm roles as role_keys. Flask-AppBuilder's
+        # own OAuth role-sync (AUTH_ROLES_SYNC_AT_LOGIN / AUTH_ROLES_MAPPING,
+        # wired in superset_config.py from AUTH_ROLES_MAPPING below) uses these
+        # role_keys together with AUTH_ROLES_MAPPING to resolve the actual
+        # Superset roles. Pre-mapping here would double-map and break lookup.
+        role_keys = roles
 
         return {
-            "username": data.get("preferred_username", ""),
+            "username": username,
             "first_name": data.get("given_name", ""),
             "last_name": data.get("family_name", ""),
             "email": data.get("email", ""),
@@ -144,16 +173,15 @@ class KeycloakSecurityManager(SupersetSecurityManager):
     def load_user_jwt(self, _jwt_header, jwt_data):
         username = jwt_data["preferred_username"]
         user = self.find_user(username=username)
-        if user:
-            logger.debug("Hydrated user %s (%s) via JWT", username, user.id)
-        else:
-            logger.debug("JWT user %s not found in Superset", username)
-        if user.is_active:
-            g.user = user
-            logger.debug("JWT user %s marked active and stored on flask.g", username)
-            return user
-        logger.debug("JWT user %s inactive; rejecting login", username)
-        return None
+        if user is None:
+            logger.debug("[user=%s] JWT user not found in Superset", username)
+            return None
+        if not user.is_active:
+            logger.debug("[user=%s] JWT user inactive; rejecting login", username)
+            return None
+        g.user = user
+        logger.debug("[user=%s] Hydrated user (id=%s) via JWT and marked active", username, user.id)
+        return user
 
 
 def configure_keycloak_oauth(appbuilder):
