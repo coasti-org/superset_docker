@@ -14,6 +14,10 @@ We keep track of the superset version (first part) and our wrapping for coasti (
 
 ## Upcoming
 
+### Fixed
+
+- Keycloak role mapping direction in `keycloak_clients.sample.yml` and `AUTH_ROLES_MAPPING` build was reversed, breaking role sync.
+- Keycloak config/role-redirects are now cached by file mtime and reloaded on login, so edits to `keycloak_clients.yml` no longer need a container restart.
 
 ### Dev
 
