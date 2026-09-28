@@ -58,7 +58,7 @@ x-templates:
     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
 
   redis_vars: &redis_vars
-    REDIS_HOST: ${REDIS_HOST:-redis}
+    REDIS_HOST: ${REDIS_HOST:-superset-redis}
     REDIS_PORT: 6379
     REDIS_PASSWORD: ${REDIS_PASSWORD}
 
@@ -72,6 +72,7 @@ x-templates:
     FLASK_ENV: ${FLASK_ENV:-production}
     SERVER_WORKER_AMOUNT: ${SERVER_WORKER_AMOUNT}
     SERVER_THREADS_AMOUNT: ${SERVER_THREADS_AMOUNT}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
     MAPBOX_API_KEY: ${MAPBOX_API_KEY}
 
@@ -181,7 +182,6 @@ services:
       redis-server
       --requirepass ${REDIS_PASSWORD}
       --maxmemory 6gb
-      --maxmemory-policy allkeys-lru
       --save 60 1000
       --appendonly yes
     volumes: *redis_volumes
