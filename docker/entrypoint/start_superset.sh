@@ -28,6 +28,9 @@ LOG_DIR="/app/superset_home/logs"
 mkdir -p "${LOG_DIR}"
 
 echo "Starting Superset Web Server..."
+# GUNICORN_KEEPALIVE must stay ABOVE Caddy's upstream idle timeout
+# (config/caddy/Caddyfile.*: keepalive 60s) so Caddy is always the side
+# that closes a pooled connection.
 exec gunicorn \
     --bind "0.0.0.0:8088" \
     --access-logfile "${LOG_DIR}/gunicorn_access.log" \
@@ -35,7 +38,7 @@ exec gunicorn \
     --worker-class gthread \
     --workers 4 \
     --timeout 120 \
-    --keep-alive 2 \
+    --keep-alive "${GUNICORN_KEEPALIVE:-75}" \
     --max-requests 1000 \
     --max-requests-jitter 100 \
     --limit-request-line 0 \
