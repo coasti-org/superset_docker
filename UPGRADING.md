@@ -102,6 +102,11 @@ Date:
 
 ##  4. Changelog
 
+### Upcoming
+
+### Notes
+- Keycloak role mapping direction fixed. If `keycloak_clients.yml` already uses the old `SupersetRole: KeycloakRole` order, flip it to `KeycloakRole: SupersetRole`.
+
 ### *0.1.2+superset.6.0.0 -> 0.1.3+superset.6.1.0*
 
 ### Scope
