@@ -14,6 +14,8 @@ We keep track of the superset version (first part) and our wrapping for coasti (
 
 ## Upcoming
 
+### Fixed
+- Resolved keep-alive timeout race condition (HTTP 502 errors) by increasing Gunicorn's default keep-alive to 75s (`GUNICORN_KEEPALIVE`) and setting Caddy's `keepalive` to 60s, ensuring Caddy always closes idle connections first.
 
 ### Dev
 
