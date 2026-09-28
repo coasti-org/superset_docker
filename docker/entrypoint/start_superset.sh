@@ -30,9 +30,7 @@ mkdir -p "${LOG_DIR}"
 echo "Starting Superset Web Server..."
 # GUNICORN_KEEPALIVE must stay ABOVE Caddy's upstream idle timeout
 # (config/caddy/Caddyfile.*: keepalive 60s) so Caddy is always the side
-# that closes a pooled connection. The old value of 2s let gunicorn close
-# conns Caddy still considered usable; the resulting race surfaces as
-# sporadic 502s on non-retryable requests (POST /api/v1/chart/data, SQL Lab).
+# that closes a pooled connection.
 exec gunicorn \
     --bind "0.0.0.0:8088" \
     --access-logfile "${LOG_DIR}/gunicorn_access.log" \
