@@ -26,6 +26,12 @@
         transport http {
             read_timeout 3600s
             write_timeout 3600s
+            # Idle upstream connections (default 2m). Must stay BELOW
+            # gunicorn's --keep-alive (GUNICORN_KEEPALIVE, default 75s) so
+            # Caddy is always the side that closes a pooled connection.
+            # The other way round races gunicorn's close and surfaces as
+            # sporadic 502s on non-retryable requests (POST chart/data).
+            keepalive 60s
         }
     }
 }
@@ -43,6 +49,12 @@ test-{$DOMAIN_NAME} {
         transport http {
             read_timeout 3600s
             write_timeout 3600s
+            # Idle upstream connections (default 2m). Must stay BELOW
+            # gunicorn's --keep-alive (GUNICORN_KEEPALIVE, default 75s) so
+            # Caddy is always the side that closes a pooled connection.
+            # The other way round races gunicorn's close and surfaces as
+            # sporadic 502s on non-retryable requests (POST chart/data).
+            keepalive 60s
         }
     }
 }
