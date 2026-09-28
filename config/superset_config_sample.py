@@ -41,11 +41,15 @@ FEATURE_FLAGS = {
 ENABLE_PROXY_FIX = True
 
 ENABLE_TIME_ROTATE = True # rotating logs
-TIME_ROTATE_LOG_LEVEL = logging.DEBUG
 
-logging.getLogger("superset.stats_logger").setLevel(logging.DEBUG)
-logging.getLogger("celery").setLevel(logging.DEBUG)
-logging.getLogger("superset.tasks").setLevel(logging.DEBUG)
+# Log level is env-driven (set LOG_LEVEL=DEBUG in .env when debugging);
+# a production sample should not default to DEBUG.
+_LOG_LEVEL = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
+TIME_ROTATE_LOG_LEVEL = _LOG_LEVEL
+
+logging.getLogger("superset.stats_logger").setLevel(_LOG_LEVEL)
+logging.getLogger("celery").setLevel(_LOG_LEVEL)
+logging.getLogger("superset.tasks").setLevel(_LOG_LEVEL)
 
 # to get sqlite working:
 PREVENT_UNSAFE_DB_CONNECTIONS=False
@@ -79,24 +83,17 @@ D3_FORMAT = {
 }
 
 # ------------------------------ Redis, Caching ------------------------------ #
-REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
+REDIS_HOST = os.environ.get("REDIS_HOST", "superset-redis")
 REDIS_PORT = os.environ.get("REDIS_PORT", "6379")
 REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
+REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}"
 from cachelib.redis import RedisCache
 # 1. Thumbnails cache
 THUMBNAIL_CACHE_CONFIG = {
     'CACHE_TYPE': 'RedisCache',
     'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24,  # 1 day
     'CACHE_KEY_PREFIX': 'thumbnail',
-    'CACHE_REDIS_URL': f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/1',
-}
-
-# 2. Table names cache
-TABLE_NAMES_CACHE_CONFIG = {
-    'CACHE_TYPE': 'RedisCache',
-    'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24,  # 1 day
-    'CACHE_KEY_PREFIX': 'table_names',
-    'CACHE_REDIS_URL': f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/2',
+    'CACHE_REDIS_URL': f'{REDIS_URL}/1',
 }
 
 # 3. Data cache
@@ -104,7 +101,7 @@ DATA_CACHE_CONFIG = {
     'CACHE_TYPE': 'RedisCache',
     'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24,  # 1 day
     'CACHE_KEY_PREFIX': 'data',
-    'CACHE_REDIS_URL': f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/3',
+    'CACHE_REDIS_URL': f'{REDIS_URL}/3',
 }
 
 # 4. Metadata cache
@@ -112,7 +109,7 @@ CACHE_CONFIG = {
     'CACHE_TYPE': 'RedisCache',
     'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24,  # 1 day
     'CACHE_KEY_PREFIX': 'metadata',
-    'CACHE_REDIS_URL': f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/4',
+    'CACHE_REDIS_URL': f'{REDIS_URL}/4',
 }
 
 # 5. Filter state cache
@@ -120,15 +117,17 @@ FILTER_STATE_CACHE_CONFIG = {
     'CACHE_TYPE': 'RedisCache',
     'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24,  # 1 day
     'CACHE_KEY_PREFIX': 'filter_state',
-    'CACHE_REDIS_URL': f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/5',
+    'CACHE_REDIS_URL': f'{REDIS_URL}/5',
 }
 
 # 6. Explore chart form data cache
+# db 2: db 0 is celery's broker/backend. Keeping it on its own db
+# means a cache-clearing FLUSHDB can't also wipe queued/unacked celery tasks.
 EXPLORE_FORM_DATA_CACHE_CONFIG = {
     'CACHE_TYPE': 'RedisCache',
     'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24,  # 1 day
     'CACHE_KEY_PREFIX': 'form_data',
-    'CACHE_REDIS_URL': f'redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0',
+    'CACHE_REDIS_URL': f'{REDIS_URL}/2',
 }
 
 # New in Superset 6.1: Distributed coordination backend for pub/sub messaging and
@@ -137,19 +136,19 @@ EXPLORE_FORM_DATA_CACHE_CONFIG = {
 DISTRIBUTED_COORDINATION_CONFIG = {
     "CACHE_TYPE": "RedisCache",
     "CACHE_KEY_PREFIX": "signal_",
-    "CACHE_REDIS_URL": f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/1",
+    "CACHE_REDIS_URL": f"{REDIS_URL}/1",
     "CACHE_DEFAULT_TIMEOUT": 300,
 }
 
 # ------------------------- Report Setup, needs Redis ------------------------ #
 
 class CeleryConfig:
-    broker_url = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
+    broker_url = f"{REDIS_URL}/0"
     imports = (
         "superset.sql_lab",
         "superset.tasks.scheduler",
     )
-    result_backend = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
+    result_backend = f"{REDIS_URL}/0"
     worker_prefetch_multiplier = 10
     task_acks_late = True
     task_annotations = {

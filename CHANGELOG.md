@@ -14,6 +14,12 @@ We keep track of the superset version (first part) and our wrapping for coasti (
 
 ## Upcoming
 
+### Fixed
+
+- Log level in `superset_config.py` is now env-driven (`LOG_LEVEL`, default `INFO`) instead of hardcoded `DEBUG`.
+- `REDIS_HOST` default fixed to `superset-redis` (matches the compose service name); Redis URLs now built from a single shared `REDIS_URL`.
+- Removed obsolete `TABLE_NAMES_CACHE_CONFIG` (renamed to `DATA_CACHE_CONFIG` since Superset 1.0; a no-op in 6.x).
+- `EXPLORE_FORM_DATA_CACHE_CONFIG` moved off Redis db 0 onto the now-unused db 2, since db 0 is also celery's broker/backend — a cache-clearing FLUSHDB no longer risks wiping queued tasks too.
 
 ### Dev
 

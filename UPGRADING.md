@@ -102,6 +102,11 @@ Date:
 
 ##  4. Changelog
 
+### Upcoming
+
+### Notes
+- Default log level changed from `DEBUG` to `INFO` (`LOG_LEVEL` env var). Set `LOG_LEVEL=DEBUG` if you relied on the old default.
+
 ### *0.1.2+superset.6.0.0 -> 0.1.3+superset.6.1.0*
 
 ### Scope
