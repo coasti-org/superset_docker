@@ -63,6 +63,55 @@ SQLALCHEMY_DATABASE_URI = (
 BABEL_DEFAULT_LOCALE = "de"
 BABEL_DEFAULT_TIMEZONE = "Europe/Berlin"
 
+D3_TIME_FORMAT = {
+    "months": [
+        "Januar",
+        "Februar",
+        "März",
+        "April",
+        "Mai",
+        "Juni",
+        "Juli",
+        "August",
+        "September",
+        "Oktober",
+        "November",
+        "Dezember",
+    ],
+    "shortMonths": [
+        "Jan",
+        "Feb",
+        "Mär",
+        "Apr",
+        "Mai",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Okt",
+        "Nov",
+        "Dez",
+    ],
+    "days": [
+        "Sonntag",
+        "Montag",
+        "Dienstag",
+        "Mittwoch",
+        "Donnerstag",
+        "Freitag",
+        "Samstag",
+    ],
+    "shortDays": [
+        "So",
+        "Mo",
+        "Di",
+        "Mi",
+        "Do",
+        "Fr",
+        "Sa",
+    ],
+}
+
 # Specify the languages that your application will support
 LANGUAGES = {
     "en": {"flag": "us", "name": "English"},
